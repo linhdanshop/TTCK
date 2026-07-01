@@ -1,0 +1,22 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "transactions": {
+      ".indexOn": ["timestamp", "dateKey", "amount"]
+    },
+    "transactionActions": {
+      ".indexOn": ["updatedAt", "checkedAt", "noteAt"]
+    },
+    "history": {
+      "$month": {
+        ".indexOn": ["createdAt"]
+      }
+    },
+    "syncLogs": {
+      "$month": {
+        ".indexOn": ["createdAt"]
+      }
+    }
+  }
+}
