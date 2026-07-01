@@ -1,15 +1,19 @@
-# TTCK - Tra cứu chuyển khoản ACB
+# TTCK - GitHub + Firebase Spark + Apps Script
 
-Web tra cứu nội dung chuyển khoản từ Gmail ACB, dùng:
+Hướng này không dùng Cloud Functions, nên không cần nâng Firebase Blaze.
 
-- GitHub Pages để host giao diện.
-- Firebase Auth để đăng nhập Gmail.
-- Firebase Cloud Functions để kiểm quyền, lọc dữ liệu, tick, ghi chú, thống kê, lịch sử.
-- Firebase Realtime Database để lưu giao dịch và thao tác.
+## Kiến trúc
 
-Repo public không chứa secret. Gmail token, OAuth secret và service account không được commit.
+```text
+GitHub Pages Web
+  -> Firebase Auth Google để đăng nhập
+  -> Apps Script Web App qua JSONP
+  -> Apps Script kiểm token Firebase, đọc Gmail ACB, ghi Firebase RTDB và Google Sheet
+```
 
-## Tài khoản mặc định
+Realtime Database khóa đọc/ghi trực tiếp từ web. Apps Script dùng service account để ghi RTDB qua REST API.
+
+## Tài khoản
 
 Admin:
 
@@ -20,15 +24,34 @@ Nhân viên đăng nhập:
 
 - `shoplinhdan2026@gmail.com`
 
-Gmail nhận nội dung CK:
+Gmail nhận mail ACB:
 
 - `nguyenthingocnhung0703@gmail.com`
 
-## Vì sao phải có Cloud Functions
+## Web không có DS Tổng
 
-GitHub Pages là web tĩnh. Code JS trên trình duyệt ai cũng xem được, nên không được để quyền đọc Gmail hoặc quyền đọc toàn bộ database trong frontend.
+`DS TỔNG` đã bị loại khỏi web để giảm rủi ro lộ dữ liệu. Danh sách tổng nằm trong Google Sheet tab `DATA_CK`, chỉ người có quyền Sheet/Apps Script mới xem.
 
-Thiết kế hiện tại khóa Realtime Database với client:
+## Bước 1 - Firebase Auth
+
+1. Vào Firebase Console.
+2. Chọn project `ttck-a7176`.
+3. Vào `Authentication`.
+4. Bật provider `Google`.
+5. Vào `Settings` -> `Authorized domains`.
+6. Thêm:
+   - `linhdanshop.github.io`
+   - `localhost`
+
+## Bước 2 - Realtime Database Rules
+
+Deploy rules:
+
+```powershell
+firebase deploy --only database
+```
+
+Rules đang khóa client:
 
 ```json
 {
@@ -39,124 +62,85 @@ Thiết kế hiện tại khóa Realtime Database với client:
 }
 ```
 
-Frontend chỉ gọi Cloud Functions. Functions kiểm tra email, role, quyền nhân viên rồi mới đọc/ghi dữ liệu.
+Web không đọc RTDB trực tiếp. Apps Script đọc/ghi bằng service account.
 
-## Cấu trúc dữ liệu chính
+## Bước 3 - Tạo Service Account Key
 
-- `transactions/{txId}`: giao dịch sync từ Gmail.
-- `transactionActions/{txId}`: trạng thái đã chọn, ghi chú, người thao tác.
-- `history/{YYYYMM}/{id}`: lịch sử thao tác theo tháng.
-- `employees/{employeeId}`: tên nhân viên và quyền.
-- `profiles/{uid}`: email đăng nhập và tên nhân viên đang chọn.
-- `syncLogs/{YYYYMM}/{id}`: log cập nhật Gmail.
+1. Firebase Console -> Project settings.
+2. Tab `Service accounts`.
+3. Bấm `Generate new private key`.
+4. Tải file JSON về máy.
+5. Không upload file JSON này lên GitHub.
 
-## Bước 1 - Bật Firebase Auth Google
+Trong file JSON, cần 2 trường:
 
-1. Vào Firebase Console.
-2. Chọn project `ttck-a7176`.
-3. Vào `Authentication`.
-4. Tab `Sign-in method`.
-5. Bật `Google`.
-6. Vào tab `Settings` hoặc `Authorized domains`.
-7. Thêm domain:
-   - `linhdanshop.github.io`
-   - `localhost`
-
-## Bước 2 - Bật Cloud Functions
-
-Cloud Functions thường cần project Firebase ở gói Blaze.
-
-Nếu project chưa bật Blaze:
-
-1. Vào Firebase Console.
-2. Chọn project `ttck-a7176`.
-3. Bấm `Upgrade`.
-4. Chọn Blaze.
-5. Gắn billing account.
-
-Không bật Cloud Functions thì vẫn làm được web tĩnh, nhưng không đạt mức bảo mật tốt vì frontend không có nơi giấu quyền đọc dữ liệu.
-
-## Bước 3 - Cài Firebase CLI trên máy
-
-Mở PowerShell:
-
-```powershell
-npm install -g firebase-tools
-firebase login
-firebase use ttck-a7176
+```json
+{
+  "client_email": "...",
+  "private_key": "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
+}
 ```
 
-Cài dependency cho Functions:
+## Bước 4 - Tạo Google Sheet + Apps Script
 
-```powershell
-cd functions
-npm install
-cd ..
-```
+1. Đăng nhập bằng Gmail nhận ACB: `nguyenthingocnhung0703@gmail.com`
+2. Tạo một Google Sheet mới.
+3. Vào `Extensions` -> `Apps Script`.
+4. Copy nội dung `apps-script/Code.gs` vào file `Code.gs`.
+5. Copy nội dung `apps-script/appsscript.json` vào file manifest `appsscript.json`.
 
-## Bước 4 - Tạo Gmail OAuth để đọc mail ACB
+Nếu chưa thấy `appsscript.json`: Apps Script -> bánh răng `Project Settings` -> bật `Show appsscript.json manifest file in editor`.
 
-1. Vào Google Cloud Console.
-2. Chọn đúng project `ttck-a7176`.
-3. Vào `APIs & Services` -> `Library`.
-4. Bật `Gmail API`.
-5. Vào `OAuth consent screen`.
-6. Điền app name nội bộ, email support.
-7. Thêm scope:
-   - `https://www.googleapis.com/auth/gmail.readonly`
-8. Nếu đang để `Testing`, refresh token có thể bị hết hạn sau vài ngày. Nên chuyển app sang `In production` nếu Google Console cho phép.
-9. Vào `Credentials`.
-10. Tạo `OAuth client ID`.
-11. Chọn loại `Web application`.
-12. Thêm Authorized redirect URI:
-    - `http://localhost:3000/oauth2callback`
-13. Copy `Client ID` và `Client secret`.
+## Bước 5 - Lưu Script Properties
 
-Chạy tool lấy refresh token:
+Trong Apps Script:
 
-```powershell
-$env:GMAIL_CLIENT_ID='DAN_CLIENT_ID'
-$env:GMAIL_CLIENT_SECRET='DAN_CLIENT_SECRET'
-node tools/gmail-oauth.js
-```
-
-Tool sẽ in link. Mở link, đăng nhập bằng Gmail:
+1. Bấm bánh răng `Project Settings`.
+2. Kéo xuống `Script properties`.
+3. Thêm:
 
 ```text
-nguyenthingocnhung0703@gmail.com
+SERVICE_ACCOUNT_EMAIL = client_email trong file JSON
+SERVICE_ACCOUNT_PRIVATE_KEY = private_key trong file JSON
 ```
 
-Sau khi đồng ý, terminal sẽ in `GMAIL_REFRESH_TOKEN`.
+Giữ nguyên dấu `\n` trong private key nếu copy một dòng. Code sẽ tự đổi `\n` thành xuống dòng thật.
 
-## Bước 5 - Lưu secret vào Firebase
+## Bước 6 - Deploy Apps Script Web App
 
-Chạy từng lệnh, paste giá trị khi CLI hỏi:
+1. Apps Script -> `Deploy`.
+2. `New deployment`.
+3. Chọn loại `Web app`.
+4. Description: `TTCK API`.
+5. Execute as: `Me`.
+6. Who has access: `Anyone`.
+7. Deploy.
+8. Copy URL dạng:
 
-```powershell
-firebase functions:secrets:set GMAIL_CLIENT_ID
-firebase functions:secrets:set GMAIL_CLIENT_SECRET
-firebase functions:secrets:set GMAIL_REFRESH_TOKEN
+```text
+https://script.google.com/macros/s/AKfycb.../exec
 ```
 
-Không đưa các giá trị này lên GitHub.
+Lần đầu chạy sẽ hỏi cấp quyền đọc Gmail, đọc/ghi Spreadsheet, gọi URL Fetch, tạo trigger. Phải cấp quyền bằng Gmail `nguyenthingocnhung0703@gmail.com`.
 
-## Bước 6 - Deploy rules và Functions
+## Bước 7 - Dán Apps Script URL vào web
 
-```powershell
-firebase deploy --only database,functions
+Mở `app.js`, đổi dòng:
+
+```js
+const APPS_SCRIPT_URL = "PASTE_APPS_SCRIPT_WEB_APP_URL_HERE";
 ```
 
-Sau khi deploy xong, web GitHub Pages sẽ gọi được Functions ở region `asia-southeast1`.
+thành URL web app thật, rồi commit/push lại GitHub.
 
-## Bước 7 - Bật GitHub Pages
+## Bước 8 - GitHub Pages
 
 1. Vào repo `linhdanshop/TTCK`.
-2. Vào `Settings`.
-3. Vào `Pages`.
-4. Source chọn `Deploy from a branch`.
-5. Branch chọn `main`.
-6. Folder chọn `/root`.
-7. Save.
+2. `Settings` -> `Pages`.
+3. Source: `Deploy from a branch`.
+4. Branch: `main`.
+5. Folder: `/root`.
+6. Save.
 
 URL dự kiến:
 
@@ -164,54 +148,58 @@ URL dự kiến:
 https://linhdanshop.github.io/TTCK/
 ```
 
-## Quyền thao tác
+## Chức năng web
 
-- Admin xem được `DS TỔNG`, set quyền nhân viên, bỏ tích, xóa lịch sử tháng.
-- Nhân viên chỉ thấy chức năng theo quyền.
-- `Được thao tác`: tick và ghi chú.
-- `Chỉ xem`: chỉ xem, không tick, không ghi chú.
-- Nhân viên có thể bấm `Chọn nhân viên` để đổi tên thao tác mà không cần thoát Gmail.
-- `Thoát Gmail` mới đăng xuất Gmail.
+- Đăng nhập Gmail, nhớ phiên 1 tháng.
+- `Thoát Gmail` mới đăng xuất.
+- Nhân viên đăng nhập xong chọn tên thao tác.
+- `Chọn nhân viên` đổi tên thao tác, không cần thoát Gmail.
+- Admin set quyền nhân viên.
+- Bộ lọc chính xác/tương đối, số tiền, ngày, thời gian.
+- Nhân viên chỉ nhập số tiền từ `0` đến `2.000.000`.
+- Nội dung CK dài hiển thị 2 dòng, bấm để xem popup đầy đủ.
+- Tab `THỐNG KÊ` hiển thị theo tháng mặc định, có lọc từ ngày đến ngày.
+- Admin có `CÀI AUTO`: mỗi 1 phút, mỗi 5 phút, hoặc tắt.
+- Admin có nút cập nhật hôm nay và 10 ngày trước.
 
-## Sync Gmail
+## Auto Sync
 
-Trong web:
+Apps Script cài trigger `autoSyncToday`.
 
-- `Cập nhật mới hôm nay`: lấy các email ACB của hôm nay.
-- `Cập nhật 10 ngày trước`: lấy lại 10 ngày gần nhất.
+- `1 phút`: chạy cập nhật hôm nay mỗi phút.
+- `5 phút`: chạy cập nhật hôm nay mỗi 5 phút.
+- `Tắt`: xóa trigger.
 
-Nếu giao dịch đã tồn tại theo mã giao dịch hoặc Gmail message id thì bỏ qua, không ghi đè tick, ghi chú hoặc lịch sử.
+Nếu Gmail đã có giao dịch rồi thì bỏ qua, không ghi đè tick/ghi chú/lịch sử.
 
-## Mẫu parser ACB đang hỗ trợ
+## Dữ liệu trong Sheet
 
-Parser nhận dạng các mẫu như:
+Apps Script tự tạo các tab:
 
-```text
-Giao dịch mới nhất:Ghi có +100,000.00 VND.
-Nội dung giao dịch: MBVCB.14910026604.555495.NGUYEN THI NHU THUY CHUYEN TIEN COC...ACB-GD-DASE555495-300626-21:04:39.
-```
+- `DATA_CK`: DS tổng giao dịch đã sync.
+- `LOG_SYNC`: lịch sử sync.
+- `CAI_DAT`: trạng thái auto sync.
+- `DEBUG_ACB`: mail không parse được.
 
-```text
-Giao dịch mới nhất:Ghi có +100,000.00 VND.
-Nội dung giao dịch: IBFT NGUYEN THI NGOC PHUONG CHUYEN TIEN GD 6181SGTTH2MAPRUW 300626-21:14:53.
-```
+## Bảo mật
 
-```text
-Giao dịch mới nhất:Ghi có +100,000.00 VND.
-Nội dung giao dịch: MBVCB.14913008728.644328.LAN NGOC COC TIEN DON DON...ACB-GD-DABO644328-010726-07:38:23.
-```
+- Repo public không chứa service account key.
+- RTDB rules khóa đọc/ghi trực tiếp.
+- Web chỉ gọi Apps Script.
+- Apps Script xác thực Firebase ID token trước khi xử lý.
+- Apps Script kiểm tra email admin/nhân viên ở server.
+- DS tổng không nằm trên web.
+
+Lưu ý: Apps Script Web App không phải API CORS chuẩn, nên web gọi bằng JSONP. Vì vậy dữ liệu nhạy cảm nhất không đưa vào URL; thao tác ghi chú bị giới hạn 500 ký tự.
 
 ## Kiểm tra nhanh
 
-```powershell
-cd functions
-npm run check
-```
+Sau khi deploy Apps Script và dán URL vào `app.js`:
 
-Nếu cần test local:
-
-```powershell
-firebase emulators:start --only functions,database
-```
-
-Khi test local, frontend đang trỏ Functions production. Nếu muốn dùng emulator thì cần thêm `connectFunctionsEmulator` trong `app.js`.
+1. Mở web GitHub Pages.
+2. Đăng nhập admin.
+3. Bấm `Cập nhật mới hôm nay`.
+4. Vào Google Sheet kiểm tra tab `DATA_CK`.
+5. Lọc số tiền/ngày/nội dung trên web.
+6. Thử tick/ghi chú.
+7. Mở tab `THỐNG KÊ`.
