@@ -86,8 +86,8 @@
           <section class="workspace">
             <div class="tab-row" role="tablist" aria-label="Danh sách">
               <button class="tab-btn active" data-tab="filtered" type="button">DANH SÁCH ĐÃ LỌC</button>
-              <button class="tab-btn admin-only" data-tab="all" type="button">DS TỔNG</button>
               <button class="tab-btn" data-tab="stats" type="button">THỐNG KÊ</button>
+              <button id="autoSyncBtn" class="tab-btn admin-only" type="button">CÀI AUTO</button>
               <button id="historyBtn" class="tab-btn admin-only" type="button">LỊCH SỬ TỔNG</button>
             </div>
 
@@ -112,28 +112,6 @@
                     </tr>
                   </thead>
                   <tbody id="filteredBody"></tbody>
-                </table>
-              </div>
-            </div>
-
-            <div id="allPanel" class="tab-panel">
-              <div class="panel-summary">
-                <strong id="allCount">0 dòng</strong>
-                <span>Giao dịch mới nhất trước</span>
-              </div>
-              <div class="table-wrap">
-                <table class="data-table">
-                  <thead>
-                    <tr>
-                      <th>Ngày</th>
-                      <th>Giờ</th>
-                      <th>Số tiền</th>
-                      <th>Nội dung CK</th>
-                      <th>Loại</th>
-                      <th>Mã GD</th>
-                    </tr>
-                  </thead>
-                  <tbody id="allBody"></tbody>
                 </table>
               </div>
             </div>
@@ -188,6 +166,20 @@
           </button>
         </div>
         <p id="contentFullText" class="content-full"></p>
+      </form>
+    </dialog>
+
+    <dialog id="autoSyncDialog" class="modal">
+      <form method="dialog">
+        <div class="modal-header">
+          <h2>Cài auto cập nhật</h2>
+          <button class="soft-btn" value="close" type="submit">Đóng</button>
+        </div>
+        <div class="employee-choices">
+          <button class="employee-choice" type="button" data-auto="1">Mỗi 1 phút</button>
+          <button class="employee-choice" type="button" data-auto="5">Mỗi 5 phút</button>
+          <button class="employee-choice" type="button" data-auto="0">Tắt auto</button>
+        </div>
       </form>
     </dialog>
 

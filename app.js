@@ -8,10 +8,6 @@ import {
   signInWithPopup,
   signOut,
 } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
-import {
-  getFunctions,
-  httpsCallable,
-} from "https://www.gstatic.com/firebasejs/10.12.5/firebase-functions.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyDR0zkPrbqQRot8KLajCPSF9nQ3qavPlrc",
@@ -22,9 +18,12 @@ const firebaseConfig = {
   appId: "1:882092560518:web:c6ff98db205ab578cb4107",
 };
 
+// Dán URL Web App Apps Script sau khi deploy.
+// Ví dụ: https://script.google.com/macros/s/AKfycb.../exec
+const APPS_SCRIPT_URL = "PASTE_APPS_SCRIPT_WEB_APP_URL_HERE";
+
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
-const functions = getFunctions(app, "asia-southeast1");
 const provider = new GoogleAuthProvider();
 provider.setCustomParameters({ prompt: "select_account" });
 
@@ -34,10 +33,10 @@ const STAFF_AMOUNT_LIMIT = 2_000_000;
 const state = {
   mode: "exact",
   tab: "filtered",
+  session: "",
   profile: null,
   employees: [],
   filteredRows: [],
-  allRows: [],
   statsRows: [],
   statsSummary: null,
   statsFilter: null,
@@ -62,8 +61,6 @@ const elements = {
   filteredBody: $("filteredBody"),
   filteredCount: $("filteredCount"),
   filteredMoney: $("filteredMoney"),
-  allBody: $("allBody"),
-  allCount: $("allCount"),
   statsBody: $("statsBody"),
   statsChips: $("statsChips"),
   statsFrom: $("statsFrom"),
@@ -88,6 +85,8 @@ const elements = {
   deleteHistoryBtn: $("deleteHistoryBtn"),
   syncTodayBtn: $("syncTodayBtn"),
   sync10DaysBtn: $("sync10DaysBtn"),
+  autoSyncBtn: $("autoSyncBtn"),
+  autoSyncDialog: $("autoSyncDialog"),
   toast: $("toast"),
 };
 
@@ -106,9 +105,11 @@ onAuthStateChanged(auth, async (user) => {
   }
 
   try {
+    ensureApiUrl();
     markSession();
     showAppLoading(user.email || "");
-    const data = await callFunction("bootstrap");
+    const data = await callApi("bootstrap", {}, true);
+    state.session = data.session || state.session;
     state.profile = data.profile;
     state.employees = data.employees || [];
     setupDefaultDates();
@@ -126,6 +127,7 @@ elements.loginBtn.addEventListener("click", async () => {
   elements.loginMessage.textContent = "";
   elements.loginBtn.disabled = true;
   try {
+    ensureApiUrl();
     await signInWithPopup(auth, provider);
     markSession();
   } catch (error) {
@@ -137,6 +139,8 @@ elements.loginBtn.addEventListener("click", async () => {
 
 elements.logoutBtn.addEventListener("click", async () => {
   localStorage.removeItem("ttckLoginAt");
+  localStorage.removeItem("ttckAppsScriptSession");
+  state.session = "";
   await signOut(auth);
 });
 
@@ -153,10 +157,8 @@ document.querySelectorAll(".filter-mode[data-mode]").forEach((button) => {
 document.querySelectorAll(".tab-btn[data-tab]").forEach((button) => {
   button.addEventListener("click", async () => {
     const tab = button.dataset.tab;
-    if (tab === "all" && !isAdmin()) return;
     state.tab = tab;
     switchTab(tab);
-    if (tab === "all" && state.allRows.length === 0) await loadAllTransactions();
     if (tab === "stats") await loadStats();
   });
 });
@@ -195,6 +197,7 @@ elements.saveEmployeesBtn.addEventListener("click", saveEmployees);
 elements.historyBtn.addEventListener("click", openHistoryDialog);
 elements.loadHistoryBtn.addEventListener("click", loadHistory);
 elements.deleteHistoryBtn.addEventListener("click", deleteHistoryMonth);
+elements.autoSyncBtn.addEventListener("click", openAutoSyncDialog);
 
 function showLogin(message = "") {
   elements.mainScreen.classList.add("hidden");
@@ -227,11 +230,6 @@ function renderShell() {
     item.classList.toggle("hidden", !isAdmin());
   });
 
-  if (!isAdmin() && state.tab === "all") {
-    state.tab = "filtered";
-    switchTab("filtered");
-  }
-
   renderEmployeeChoices();
   refreshIcons();
 }
@@ -240,7 +238,7 @@ function switchTab(tab) {
   document.querySelectorAll(".tab-btn[data-tab]").forEach((button) => {
     button.classList.toggle("active", button.dataset.tab === tab);
   });
-  ["filtered", "all", "stats"].forEach((name) => {
+  ["filtered", "stats"].forEach((name) => {
     $(`${name}Panel`).classList.toggle("active", name === tab);
   });
 }
@@ -274,7 +272,7 @@ async function searchTransactions() {
   setBusy("Đang lọc dữ liệu...");
   const parsedAmount = parseAmount(elements.amountInput.value);
   try {
-    const data = await callFunction("searchTransactions", {
+    const data = await callApi("searchTransactions", {
       mode: state.mode,
       query: elements.queryInput.value.trim(),
       amount: parsedAmount === null ? "" : parsedAmount,
@@ -296,39 +294,6 @@ function renderFiltered() {
   elements.filteredCount.textContent = `${state.filteredRows.length} dòng`;
   elements.filteredMoney.textContent = formatMoney(total);
   refreshIcons();
-}
-
-async function loadAllTransactions() {
-  if (!isAdmin()) return;
-  setBusy("Đang tải DS tổng...");
-  try {
-    const data = await callFunction("listTransactions", { limit: 500 });
-    state.allRows = data.rows || [];
-    renderAll();
-    setReady("Đã tải DS tổng");
-  } catch (error) {
-    showToast(readError(error));
-    setReady("Lỗi tải DS tổng");
-  }
-}
-
-function renderAll() {
-  elements.allCount.textContent = `${state.allRows.length} dòng`;
-  elements.allBody.innerHTML = state.allRows
-    .map((row) => {
-      return `
-        <tr>
-          <td>${escapeHtml(row.dateText || "")}</td>
-          <td>${escapeHtml(row.time || "")}</td>
-          <td>${formatMoney(row.amount)}</td>
-          <td><span class="content-cell" data-content="${escapeAttr(row.content || "")}">${escapeHtml(row.content || "")}</span></td>
-          <td>${escapeHtml(row.type || "")}</td>
-          <td>${escapeHtml(row.transactionCode || "")}</td>
-        </tr>
-      `;
-    })
-    .join("");
-  bindContentClicks(elements.allBody);
 }
 
 function renderActionRows(tbody, rows) {
@@ -372,7 +337,7 @@ async function onCheckedChange(event) {
   const checked = input.checked;
   input.disabled = true;
   try {
-    await callFunction("setChecked", { id, checked });
+    await callApi("setChecked", { id, checked });
     await searchTransactions();
   } catch (error) {
     input.checked = !checked;
@@ -388,7 +353,7 @@ async function onNoteBlur(event) {
   const id = tr.dataset.id;
   input.disabled = true;
   try {
-    await callFunction("saveNote", { id, note: input.value.trim() });
+    await callApi("saveNote", { id, note: input.value.trim() });
     await searchTransactions();
   } catch (error) {
     showToast(readError(error));
@@ -401,7 +366,7 @@ async function loadStats() {
   if (!elements.statsFrom.value || !elements.statsTo.value) setupDefaultDates();
   setBusy("Đang tải thống kê...");
   try {
-    const data = await callFunction("getStats", {
+    const data = await callApi("getStats", {
       from: elements.statsFrom.value,
       to: elements.statsTo.value,
     });
@@ -474,7 +439,7 @@ async function syncGmail(days) {
   const label = days === 1 ? "hôm nay" : "10 ngày trước";
   setBusy(`Đang cập nhật Gmail ${label}...`);
   try {
-    const data = await callFunction("syncGmail", { days });
+    const data = await callApi("syncGmail", { days });
     setReady(`Thêm mới ${data.added || 0}, trùng ${data.duplicated || 0}`);
     showToast(`Đã cập nhật: thêm ${data.added || 0}, trùng ${data.duplicated || 0}`);
     if (hasFilters()) await searchTransactions();
@@ -505,7 +470,7 @@ function renderEmployeeChoices() {
   elements.employeeChoices.querySelectorAll(".employee-choice").forEach((button) => {
     button.addEventListener("click", async () => {
       try {
-        const data = await callFunction("selectEmployee", { employeeId: button.dataset.id });
+        const data = await callApi("selectEmployee", { employeeId: button.dataset.id });
         state.profile = data.profile;
         renderShell();
         elements.employeeDialog.close();
@@ -572,7 +537,7 @@ function addEmployeeDraft() {
 async function saveEmployees() {
   if (!isAdmin()) return;
   try {
-    const data = await callFunction("saveEmployees", {
+    const data = await callApi("saveEmployees", {
       employees: state.permissionDraft,
     });
     state.employees = data.employees || [];
@@ -594,7 +559,7 @@ function openHistoryDialog() {
 async function loadHistory() {
   if (!isAdmin()) return;
   try {
-    const data = await callFunction("getHistory", { month: normalizeMonth(elements.historyMonth.value) });
+    const data = await callApi("getHistory", { month: normalizeMonth(elements.historyMonth.value) });
     elements.historyBody.innerHTML = (data.rows || [])
       .map((row) => `
         <tr>
@@ -616,12 +581,29 @@ async function deleteHistoryMonth() {
   if (!month) return;
   if (!confirm(`Xóa lịch sử tháng ${month}?`)) return;
   try {
-    await callFunction("deleteHistoryMonth", { month });
+    await callApi("deleteHistoryMonth", { month });
     await loadHistory();
     showToast("Đã xóa lịch sử tháng đã chọn");
   } catch (error) {
     showToast(readError(error));
   }
+}
+
+function openAutoSyncDialog() {
+  if (!isAdmin()) return;
+  elements.autoSyncDialog.showModal();
+  elements.autoSyncDialog.querySelectorAll("[data-auto]").forEach((button) => {
+    button.onclick = async () => {
+      const minutes = Number(button.dataset.auto || 0);
+      try {
+        const data = await callApi("setAutoSync", { minutes });
+        showToast(data.message || "Đã cập nhật auto");
+        elements.autoSyncDialog.close();
+      } catch (error) {
+        showToast(readError(error));
+      }
+    };
+  });
 }
 
 function bindContentClicks(root) {
@@ -634,10 +616,71 @@ function bindContentClicks(root) {
   });
 }
 
-async function callFunction(name, data = {}) {
-  const fn = httpsCallable(functions, name);
-  const result = await fn(data);
+async function callApi(action, payload = {}, forceToken = false) {
+  ensureApiUrl();
+  if (!state.session) {
+    state.session = localStorage.getItem("ttckAppsScriptSession") || "";
+  }
+
+  const params = {
+    action,
+    payload,
+    session: state.session,
+  };
+
+  if (forceToken || !state.session) {
+    const user = auth.currentUser;
+    if (!user) throw new Error("Cần đăng nhập Gmail.");
+    params.idToken = await user.getIdToken(true);
+  }
+
+  const result = await jsonpRequest(params);
+  if (!result || result.ok === false) {
+    if (result && result.needToken && !forceToken) {
+      return callApi(action, payload, true);
+    }
+    throw new Error((result && result.error) || "Apps Script API lỗi.");
+  }
+
+  if (result.session) {
+    state.session = result.session;
+    localStorage.setItem("ttckAppsScriptSession", result.session);
+  }
+
   return result.data || {};
+}
+
+function jsonpRequest(params) {
+  return new Promise((resolve, reject) => {
+    const callback = `__ttck_cb_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    const url = new URL(APPS_SCRIPT_URL);
+    url.searchParams.set("callback", callback);
+    url.searchParams.set("action", params.action);
+    url.searchParams.set("payload", JSON.stringify(params.payload || {}));
+    if (params.session) url.searchParams.set("session", params.session);
+    if (params.idToken) url.searchParams.set("idToken", params.idToken);
+
+    const script = document.createElement("script");
+    const timer = setTimeout(() => cleanup(() => reject(new Error("Apps Script phản hồi quá lâu."))), 30000);
+
+    window[callback] = (data) => cleanup(() => resolve(data));
+    script.onerror = () => cleanup(() => reject(new Error("Không gọi được Apps Script Web App.")));
+    script.src = url.toString();
+    document.head.appendChild(script);
+
+    function cleanup(done) {
+      clearTimeout(timer);
+      delete window[callback];
+      script.remove();
+      done();
+    }
+  });
+}
+
+function ensureApiUrl() {
+  if (!APPS_SCRIPT_URL || APPS_SCRIPT_URL.includes("PASTE_APPS_SCRIPT")) {
+    throw new Error("Chưa cấu hình Apps Script Web App URL trong app.js.");
+  }
 }
 
 function isAdmin() {

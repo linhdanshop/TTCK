@@ -83,13 +83,17 @@ Trong file JSON, cần 2 trường:
 
 ## Bước 4 - Tạo Google Sheet + Apps Script
 
-1. Đăng nhập bằng Gmail nhận ACB: `nguyenthingocnhung0703@gmail.com`
+1. Đăng nhập bằng Gmail nhận ACB:
+   `nguyenthingocnhung0703@gmail.com`
 2. Tạo một Google Sheet mới.
 3. Vào `Extensions` -> `Apps Script`.
 4. Copy nội dung `apps-script/Code.gs` vào file `Code.gs`.
 5. Copy nội dung `apps-script/appsscript.json` vào file manifest `appsscript.json`.
 
-Nếu chưa thấy `appsscript.json`: Apps Script -> bánh răng `Project Settings` -> bật `Show appsscript.json manifest file in editor`.
+Nếu chưa thấy `appsscript.json`:
+
+1. Trong Apps Script, bấm bánh răng `Project Settings`.
+2. Bật `Show appsscript.json manifest file in editor`.
 
 ## Bước 5 - Lưu Script Properties
 
@@ -104,7 +108,7 @@ SERVICE_ACCOUNT_EMAIL = client_email trong file JSON
 SERVICE_ACCOUNT_PRIVATE_KEY = private_key trong file JSON
 ```
 
-Giữ nguyên dấu `\n` trong private key nếu copy một dòng. Code sẽ tự đổi `\n` thành xuống dòng thật.
+Giữ nguyên dấu `\n` trong private key nếu copy một dòng. Code đã tự đổi `\n` thành xuống dòng thật.
 
 ## Bước 6 - Deploy Apps Script Web App
 
@@ -121,7 +125,14 @@ Giữ nguyên dấu `\n` trong private key nếu copy một dòng. Code sẽ t�
 https://script.google.com/macros/s/AKfycb.../exec
 ```
 
-Lần đầu chạy sẽ hỏi cấp quyền đọc Gmail, đọc/ghi Spreadsheet, gọi URL Fetch, tạo trigger. Phải cấp quyền bằng Gmail `nguyenthingocnhung0703@gmail.com`.
+Lần đầu chạy sẽ hỏi cấp quyền:
+
+- đọc Gmail
+- đọc/ghi Spreadsheet
+- gọi URL Fetch
+- tạo trigger
+
+Phải cấp quyền bằng Gmail `nguyenthingocnhung0703@gmail.com`.
 
 ## Bước 7 - Dán Apps Script URL vào web
 
@@ -131,7 +142,9 @@ Mở `app.js`, đổi dòng:
 const APPS_SCRIPT_URL = "PASTE_APPS_SCRIPT_WEB_APP_URL_HERE";
 ```
 
-thành URL web app thật, rồi commit/push lại GitHub.
+thành URL web app thật.
+
+Sau đó commit/push lại GitHub.
 
 ## Bước 8 - GitHub Pages
 
