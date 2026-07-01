@@ -1,1 +1,265 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Tra cứu chuyển khoản</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <section id="loginScreen" class="login-screen">
+        <div class="login-panel">
+          <div>
+            <p class="eyebrow">ACB - Gmail</p>
+            <h1>Tra cứu chuyển khoản</h1>
+          </div>
+          <button id="loginBtn" class="primary-btn wide-btn" type="button">
+            <i data-lucide="mail"></i>
+            Đăng nhập Gmail
+          </button>
+          <p id="loginMessage" class="message-line"></p>
+        </div>
+      </section>
 
+      <section id="mainScreen" class="app-shell hidden">
+        <header class="topbar">
+          <div class="title-group">
+            <h1>Danh sách làm giá</h1>
+            <span id="syncStatus" class="sync-status">Sẵn sàng</span>
+          </div>
+          <nav class="session-actions" aria-label="Tài khoản">
+            <span id="userBadge" class="user-badge">...</span>
+            <button id="permissionsBtn" class="ghost-btn admin-only" type="button">Set quyền NV</button>
+            <button id="chooseEmployeeBtn" class="ghost-btn" type="button">Chọn nhân viên</button>
+            <button id="logoutBtn" class="danger-link" type="button">Thoát Gmail</button>
+          </nav>
+        </header>
+
+        <main class="main-layout">
+          <aside class="filter-panel" aria-label="Bộ lọc">
+            <div class="filter-tabs" role="radiogroup" aria-label="Kiểu lọc">
+              <button class="filter-mode active" type="button" data-mode="exact">Chính xác</button>
+              <button class="filter-mode" type="button" data-mode="fuzzy">Tương đối</button>
+              <button id="clearFiltersBtn" class="filter-mode clear-mode" type="button">Xóa lọc</button>
+            </div>
+
+            <label class="field-block search-field">
+              <span>Tìm kiếm nội dung</span>
+              <input id="queryInput" type="search" autocomplete="off" placeholder="nguyen thi thuy" />
+            </label>
+
+            <label class="field-block">
+              <span>Số tiền</span>
+              <input id="amountInput" type="text" inputmode="numeric" autocomplete="off" placeholder="100000" />
+            </label>
+
+            <label class="field-block">
+              <span>Ngày</span>
+              <input id="dateInput" type="date" />
+            </label>
+
+            <label class="field-block">
+              <span>Thời gian</span>
+              <input id="timeInput" type="time" />
+            </label>
+
+            <div class="filter-actions">
+              <button id="searchBtn" class="primary-btn" type="button">
+                <i data-lucide="search"></i>
+                Lọc
+              </button>
+            </div>
+
+            <div class="sync-actions">
+              <button id="syncTodayBtn" class="soft-btn admin-only" type="button">
+                <i data-lucide="refresh-cw"></i>
+                Cập nhật mới hôm nay
+              </button>
+              <button id="sync10DaysBtn" class="soft-btn admin-only" type="button">
+                <i data-lucide="calendar-clock"></i>
+                Cập nhật 10 ngày trước
+              </button>
+            </div>
+          </aside>
+
+          <section class="workspace">
+            <div class="tab-row" role="tablist" aria-label="Danh sách">
+              <button class="tab-btn active" data-tab="filtered" type="button">DANH SÁCH ĐÃ LỌC</button>
+              <button class="tab-btn admin-only" data-tab="all" type="button">DS TỔNG</button>
+              <button class="tab-btn" data-tab="stats" type="button">THỐNG KÊ</button>
+              <button id="historyBtn" class="tab-btn admin-only" type="button">LỊCH SỬ TỔNG</button>
+            </div>
+
+            <div id="filteredPanel" class="tab-panel active">
+              <div class="panel-summary">
+                <strong id="filteredCount">0 dòng</strong>
+                <span id="filteredMoney">0</span>
+              </div>
+              <div class="table-wrap">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>Ngày</th>
+                      <th>Giờ</th>
+                      <th>Số tiền</th>
+                      <th>Nội dung CK</th>
+                      <th>Loại</th>
+                      <th>Đã chọn</th>
+                      <th>Ghi chú</th>
+                      <th>Thao tác</th>
+                      <th>Thời gian</th>
+                    </tr>
+                  </thead>
+                  <tbody id="filteredBody"></tbody>
+                </table>
+              </div>
+            </div>
+
+            <div id="allPanel" class="tab-panel">
+              <div class="panel-summary">
+                <strong id="allCount">0 dòng</strong>
+                <span>Giao dịch mới nhất trước</span>
+              </div>
+              <div class="table-wrap">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>Ngày</th>
+                      <th>Giờ</th>
+                      <th>Số tiền</th>
+                      <th>Nội dung CK</th>
+                      <th>Loại</th>
+                      <th>Mã GD</th>
+                    </tr>
+                  </thead>
+                  <tbody id="allBody"></tbody>
+                </table>
+              </div>
+            </div>
+
+            <div id="statsPanel" class="tab-panel">
+              <div class="stats-toolbar">
+                <label>
+                  Từ ngày
+                  <input id="statsFrom" type="date" />
+                </label>
+                <label>
+                  Đến ngày
+                  <input id="statsTo" type="date" />
+                </label>
+                <button id="statsLoadBtn" class="soft-btn" type="button">
+                  <i data-lucide="bar-chart-3"></i>
+                  Xem
+                </button>
+              </div>
+
+              <div id="statsChips" class="stats-chips"></div>
+
+              <div class="table-wrap">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>Ngày CK</th>
+                      <th>Giờ CK</th>
+                      <th>Số tiền</th>
+                      <th>Nội dung CK</th>
+                      <th>Đã chọn</th>
+                      <th>Ghi chú</th>
+                      <th>Người làm</th>
+                      <th>Thời gian thao tác</th>
+                    </tr>
+                  </thead>
+                  <tbody id="statsBody"></tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+        </main>
+      </section>
+    </div>
+
+    <dialog id="contentDialog" class="modal">
+      <form method="dialog">
+        <div class="modal-header">
+          <h2>Nội dung CK</h2>
+          <button class="icon-btn" value="close" aria-label="Đóng" type="submit">
+            <i data-lucide="x"></i>
+          </button>
+        </div>
+        <p id="contentFullText" class="content-full"></p>
+      </form>
+    </dialog>
+
+    <dialog id="employeeDialog" class="modal">
+      <form method="dialog">
+        <div class="modal-header">
+          <h2>Chọn nhân viên</h2>
+          <button class="icon-btn" value="close" aria-label="Đóng" type="submit">
+            <i data-lucide="x"></i>
+          </button>
+        </div>
+        <div id="employeeChoices" class="employee-choices"></div>
+      </form>
+    </dialog>
+
+    <dialog id="permissionsDialog" class="modal wide-modal">
+      <form method="dialog">
+        <div class="modal-header">
+          <h2>Set quyền nhân viên</h2>
+          <button class="soft-btn" value="close" type="submit">Đóng</button>
+        </div>
+        <div class="permission-grid">
+          <div class="grid-head">Tên nhân viên</div>
+          <div class="grid-head">Quyền</div>
+          <div class="grid-head">Xóa</div>
+          <div id="permissionRows" class="permission-rows"></div>
+        </div>
+        <div class="add-employee-row">
+          <input id="newEmployeeName" type="text" placeholder="Tên nhân viên mới" />
+          <select id="newEmployeePermission">
+            <option value="write">Được thao tác</option>
+            <option value="read">Chỉ xem</option>
+          </select>
+          <button id="addEmployeeBtn" class="soft-btn" type="button">Thêm</button>
+          <button id="saveEmployeesBtn" class="success-btn" type="button">Lưu quyền</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="historyDialog" class="modal wide-modal">
+      <form method="dialog">
+        <div class="modal-header">
+          <h2>Lịch sử tổng</h2>
+          <button class="soft-btn" value="close" type="submit">Đóng</button>
+        </div>
+        <div class="stats-toolbar">
+          <label>
+            Tháng
+            <input id="historyMonth" type="month" />
+          </label>
+          <button id="loadHistoryBtn" class="soft-btn" type="button">Xem lịch sử</button>
+          <button id="deleteHistoryBtn" class="danger-btn" type="button">Xóa tháng đã chọn</button>
+        </div>
+        <div class="table-wrap modal-table">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Thời gian</th>
+                <th>Người làm</th>
+                <th>Hành động</th>
+                <th>Nội dung</th>
+              </tr>
+            </thead>
+            <tbody id="historyBody"></tbody>
+          </table>
+        </div>
+      </form>
+    </dialog>
+
+    <div id="toast" class="toast hidden"></div>
+
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
