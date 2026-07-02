@@ -1,22 +1,27 @@
 /***************
- * TTCK Apps Script backend
- * - Deploy as Web App, Execute as: Me, Access: Anyone
- * - The script owner should be the Gmail account that receives ACB mail:
- *   nguyenthingocnhung0703@gmail.com
+ * TTCK Apps Script backend - no Firebase Functions, no service account.
+ * Deploy as Web App, Execute as: Me, Access: Anyone.
+ * The script owner should be the Gmail account that receives ACB mail:
+ * nguyenthingocnhung0703@gmail.com
  ***************/
 
 const CONFIG = {
   TZ: 'Asia/Ho_Chi_Minh',
   ACB_FROM: 'mailalert@acb.com.vn',
   MAX_SEARCH_ROWS: 500,
-  MAX_TOTAL_ROWS_FOR_SHEET: 2000,
+  MAX_GMAIL_THREADS: 2000,
   SESSION_SECONDS: 21600,
-  DATA_SHEET: 'DATA_CK',
-  LOG_SHEET: 'LOG_SYNC',
-  SETTINGS_SHEET: 'CAI_DAT',
-  DEBUG_SHEET: 'DEBUG_ACB',
+  STAFF_AMOUNT_LIMIT: 2000000,
   FIREBASE_API_KEY: 'AIzaSyDR0zkPrbqQRot8KLajCPSF9nQ3qavPlrc',
-  DATABASE_URL: 'https://ttck-a7176-default-rtdb.asia-southeast1.firebasedatabase.app',
+  SHEETS: {
+    DATA: 'DATA_CK',
+    EMPLOYEES: 'NHAN_VIEN',
+    PROFILES: 'PHIEN_NGUOI_DUNG',
+    HISTORY: 'LICH_SU',
+    LOG: 'LOG_SYNC',
+    SETTINGS: 'CAI_DAT',
+    DEBUG: 'DEBUG_ACB'
+  },
   ADMIN_EMAILS: [
     'kythuatlado@gmail.com',
     'tranvanan180393@gmail.com'
@@ -30,6 +35,18 @@ const CONFIG = {
     { id: 'huyen', name: 'Huyền', permission: 'read', active: true }
   ]
 };
+
+const DATA_HEADERS = [
+  'ID', 'Ngày', 'Giờ', 'Ngày giờ', 'Loại', 'Số tiền', 'Nội dung CK', 'Mã GD',
+  'Gmail Message ID', 'Đã chọn', 'Ghi chú', 'Thao tác', 'Thời gian thao tác',
+  'Tạo lúc', 'Email thao tác'
+];
+const EMPLOYEE_HEADERS = ['ID', 'Tên nhân viên', 'Quyền', 'Trạng thái', 'Cập nhật lúc'];
+const PROFILE_HEADERS = ['UID', 'Email', 'Role', 'Mã nhân viên', 'Tên nhân viên', 'Cập nhật lúc'];
+const HISTORY_HEADERS = ['Thời gian', 'Tháng', 'Người làm', 'Email', 'Hành động', 'Nội dung', 'ID giao dịch', 'Trước', 'Sau'];
+const LOG_HEADERS = ['Thời gian', 'Loại', 'Thêm mới', 'Trùng', 'Bỏ qua', 'Ghi chú'];
+const SETTINGS_HEADERS = ['Khóa', 'Giá trị', 'Cập nhật lúc', 'Người cập nhật'];
+const DEBUG_HEADERS = ['Thời gian', 'Gmail ID', 'Lý do', 'Mẫu nội dung'];
 
 function doGet(e) {
   const callback = String((e.parameter && e.parameter.callback) || '').trim();
@@ -45,33 +62,23 @@ function doGet(e) {
     const session = String((e.parameter && e.parameter.session) || '').trim();
     response = route_(action, payload, idToken, session);
   } catch (err) {
-    if (err && err.message === '__NEED_TOKEN__') {
-      response = {
-        ok: false,
-        needToken: true,
-        error: 'Cần làm mới phiên đăng nhập.'
-      };
-    } else {
-    response = {
-      ok: false,
-      error: err && err.message ? err.message : String(err)
-    };
-    }
+    response = err && err.message === '__NEED_TOKEN__'
+      ? { ok: false, needToken: true, error: 'Cần làm mới phiên đăng nhập.' }
+      : { ok: false, error: err && err.message ? err.message : String(err) };
   }
 
-  const output = safeCallback + '(' + JSON.stringify(response) + ');';
   return ContentService
-    .createTextOutput(output)
+    .createTextOutput(safeCallback + '(' + JSON.stringify(response) + ');')
     .setMimeType(ContentService.MimeType.JAVASCRIPT);
 }
 
 function route_(action, payload, idToken, session) {
   const user = getUser_(idToken, session);
-  let data;
+  ensureAll_();
 
+  let data;
   switch (action) {
     case 'bootstrap':
-      ensureAll_();
       data = {
         profile: ensureProfile_(user),
         employees: readEmployees_()
@@ -127,10 +134,9 @@ function route_(action, payload, idToken, session) {
       throw new Error('Action không hợp lệ.');
   }
 
-  const newSession = session || createSession_(user);
   return {
     ok: true,
-    session: newSession,
+    session: session || createSession_(user),
     data: data || {}
   };
 }
@@ -140,15 +146,11 @@ function getUser_(idToken, session) {
     const cached = CacheService.getScriptCache().get('session_' + session);
     if (cached) return JSON.parse(cached);
   }
-
-  if (!idToken) {
-    throwNeedToken_();
-  }
+  if (!idToken) throw new Error('__NEED_TOKEN__');
 
   const info = verifyFirebaseToken_(idToken);
   const email = String(info.email || '').toLowerCase();
   const uid = String(info.localId || '').trim();
-
   if (!email || !uid) throw new Error('Không đọc được email đăng nhập.');
 
   const role = CONFIG.ADMIN_EMAILS.indexOf(email) >= 0
@@ -156,14 +158,9 @@ function getUser_(idToken, session) {
     : CONFIG.STAFF_EMAILS.indexOf(email) >= 0
       ? 'staff'
       : '';
-
   if (!role) throw new Error('Gmail này chưa được cấp quyền.');
 
   return { uid, email, role };
-}
-
-function throwNeedToken_() {
-  throw new Error('__NEED_TOKEN__');
 }
 
 function verifyFirebaseToken_(idToken) {
@@ -174,9 +171,8 @@ function verifyFirebaseToken_(idToken) {
     muteHttpExceptions: true,
     payload: JSON.stringify({ idToken })
   });
-  const code = res.getResponseCode();
   const data = parseJson_(res.getContentText() || '{}');
-  if (code < 200 || code >= 300 || !data.users || !data.users.length) {
+  if (res.getResponseCode() < 200 || res.getResponseCode() >= 300 || !data.users || !data.users.length) {
     throw new Error('Token đăng nhập không hợp lệ hoặc đã hết hạn.');
   }
   return data.users[0];
@@ -191,374 +187,354 @@ function createSession_(user) {
 function ensureAll_() {
   ensureSheets_();
   ensureEmployees_();
+  fillMissingDataIds_();
 }
 
 function ensureSheets_() {
-  const ss = SpreadsheetApp.getActive();
-  const data = ss.getSheetByName(CONFIG.DATA_SHEET) || ss.insertSheet(CONFIG.DATA_SHEET);
-  ensureHeader_(data, [
-    'Ngày', 'Giờ', 'Ngày giờ', 'Loại', 'Số tiền', 'Nội dung CK', 'Mã GD',
-    'Gmail Message ID', 'Đã chọn', 'Ghi chú', 'Thao tác', 'Thời gian thao tác', 'Tạo lúc'
-  ]);
+  ensureSheet_(CONFIG.SHEETS.DATA, DATA_HEADERS);
+  ensureSheet_(CONFIG.SHEETS.EMPLOYEES, EMPLOYEE_HEADERS);
+  ensureSheet_(CONFIG.SHEETS.PROFILES, PROFILE_HEADERS);
+  ensureSheet_(CONFIG.SHEETS.HISTORY, HISTORY_HEADERS);
+  ensureSheet_(CONFIG.SHEETS.LOG, LOG_HEADERS);
+  ensureSheet_(CONFIG.SHEETS.SETTINGS, SETTINGS_HEADERS);
+  ensureSheet_(CONFIG.SHEETS.DEBUG, DEBUG_HEADERS);
+
+  const data = getSheet_(CONFIG.SHEETS.DATA);
   data.setFrozenRows(1);
-  data.getRange('A:A').setNumberFormat('dd/MM/yyyy');
-  data.getRange('B:B').setNumberFormat('@');
-  data.getRange('C:C').setNumberFormat('dd/MM/yyyy HH:mm:ss');
-  data.getRange('E:E').setNumberFormat('#,##0');
-
-  const log = ss.getSheetByName(CONFIG.LOG_SHEET) || ss.insertSheet(CONFIG.LOG_SHEET);
-  ensureHeader_(log, ['Thời gian', 'Loại', 'Thêm mới', 'Trùng', 'Bỏ qua', 'Ghi chú']);
-  log.setFrozenRows(1);
-
-  const settings = ss.getSheetByName(CONFIG.SETTINGS_SHEET) || ss.insertSheet(CONFIG.SETTINGS_SHEET);
-  ensureHeader_(settings, ['Khóa', 'Giá trị', 'Cập nhật lúc', 'Người cập nhật']);
-  settings.setFrozenRows(1);
-
-  const debug = ss.getSheetByName(CONFIG.DEBUG_SHEET) || ss.insertSheet(CONFIG.DEBUG_SHEET);
-  ensureHeader_(debug, ['Thời gian', 'Gmail ID', 'Lý do', 'Mẫu nội dung']);
-  debug.setFrozenRows(1);
+  data.getRange('B:B').setNumberFormat('dd/MM/yyyy');
+  data.getRange('C:C').setNumberFormat('@');
+  data.getRange('D:D').setNumberFormat('dd/MM/yyyy HH:mm:ss');
+  data.getRange('F:F').setNumberFormat('#,##0');
+  data.getRange('M:M').setNumberFormat('dd/MM/yyyy HH:mm:ss');
+  data.getRange('N:N').setNumberFormat('dd/MM/yyyy HH:mm:ss');
 }
 
-function ensureHeader_(sheet, headers) {
+function ensureSheet_(name, headers) {
+  const ss = SpreadsheetApp.getActive();
+  const sheet = ss.getSheetByName(name) || ss.insertSheet(name);
   if (sheet.getLastRow() === 0) {
     sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
-    return;
+  } else {
+    if (name === CONFIG.SHEETS.DATA && String(sheet.getRange(1, 1).getValue()) !== 'ID') {
+      sheet.insertColumnBefore(1);
+    }
+    const lastCol = sheet.getLastColumn();
+    if (lastCol < headers.length) sheet.insertColumnsAfter(lastCol, headers.length - lastCol);
+    sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
   }
-  const current = sheet.getRange(1, 1, 1, headers.length).getValues()[0];
-  for (let i = 0; i < headers.length; i++) {
-    if (!current[i]) sheet.getRange(1, i + 1).setValue(headers[i]);
-  }
+  sheet.setFrozenRows(1);
+  return sheet;
 }
 
 function ensureEmployees_() {
-  const existing = firebaseGet_('employees') || {};
-  if (Object.keys(existing).length) return;
-  const data = {};
-  CONFIG.DEFAULT_EMPLOYEES.forEach(emp => {
-    data[emp.id] = Object.assign({}, emp, { createdAt: now_() });
+  const sh = getSheet_(CONFIG.SHEETS.EMPLOYEES);
+  if (sh.getLastRow() > 1) return;
+  const now = new Date();
+  const rows = CONFIG.DEFAULT_EMPLOYEES.map(emp => [
+    emp.id, emp.name, emp.permission, emp.active === false ? 'inactive' : 'active', now
+  ]);
+  sh.getRange(2, 1, rows.length, EMPLOYEE_HEADERS.length).setValues(rows);
+}
+
+function fillMissingDataIds_() {
+  const sh = getSheet_(CONFIG.SHEETS.DATA);
+  const last = sh.getLastRow();
+  if (last <= 1) return;
+  const range = sh.getRange(2, 1, last - 1, DATA_HEADERS.length);
+  const values = range.getValues();
+  let changed = false;
+  values.forEach(row => {
+    if (!row[0]) {
+      row[0] = buildId_(String(row[7] || ''), String(row[8] || ''), row[3], row[5]);
+      changed = true;
+    }
   });
-  firebasePut_('employees', data);
+  if (changed) range.setValues(values);
 }
 
 function readEmployees_() {
-  ensureEmployees_();
-  const employees = firebaseGet_('employees') || {};
-  return Object.keys(employees)
-    .map(id => Object.assign({ id }, employees[id]))
-    .filter(emp => emp.active !== false)
-    .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'vi'));
+  const sh = getSheet_(CONFIG.SHEETS.EMPLOYEES);
+  const values = sh.getLastRow() <= 1
+    ? []
+    : sh.getRange(2, 1, sh.getLastRow() - 1, EMPLOYEE_HEADERS.length).getValues();
+  return values
+    .map(row => ({
+      id: safeEmployeeId_(row[0] || row[1]),
+      name: String(row[1] || '').trim(),
+      permission: row[2] === 'write' ? 'write' : 'read',
+      active: String(row[3] || 'active') !== 'inactive'
+    }))
+    .filter(emp => emp.id && emp.name && emp.active !== false);
 }
 
 function ensureProfile_(user) {
-  const path = 'profiles/' + safeKey_(user.uid);
-  let profile = firebaseGet_(path);
-  if (!profile) {
-    profile = {
-      uid: user.uid,
-      email: user.email,
-      role: user.role,
-      employeeId: '',
-      employeeName: user.role === 'admin' ? 'Admin' : '',
-      employeePermission: user.role === 'admin' ? 'write' : '',
-      createdAt: now_(),
-      updatedAt: now_()
-    };
-    firebasePut_(path, profile);
-    return profile;
+  const sh = getSheet_(CONFIG.SHEETS.PROFILES);
+  const found = findProfileRow_(user.uid);
+  if (found) {
+    return normalizeProfile_(user, sh.getRange(found, 1, 1, PROFILE_HEADERS.length).getValues()[0]);
   }
 
-  profile.email = user.email;
-  profile.role = user.role;
-  if (user.role === 'admin' && !profile.employeeName) {
-    profile.employeeName = 'Admin';
-    profile.employeePermission = 'write';
-  }
-  profile.updatedAt = now_();
-  firebasePatch_(path, profile);
-  return profile;
+  const row = [user.uid, user.email, user.role, '', '', new Date()];
+  sh.appendRow(row);
+  return normalizeProfile_(user, row);
 }
 
 function selectEmployee_(user, employeeId) {
-  const id = String(employeeId || '').trim();
-  const profile = ensureProfile_(user);
+  const id = safeEmployeeId_(employeeId || '');
+  let employeeName = '';
 
-  if (!id && user.role !== 'admin') throw new Error('Nhân viên phải chọn tên thao tác.');
-
-  if (!id) {
-    profile.employeeId = '';
-    profile.employeeName = 'Admin';
-    profile.employeePermission = 'write';
-  } else {
-    const employee = firebaseGet_('employees/' + safeEmployeeId_(id));
-    if (!employee || employee.active === false) throw new Error('Không tìm thấy nhân viên.');
-    profile.employeeId = employee.id || safeEmployeeId_(id);
-    profile.employeeName = employee.name;
-    profile.employeePermission = employee.permission;
+  if (id) {
+    const employee = readEmployees_().find(emp => emp.id === id);
+    if (!employee) throw new Error('Không tìm thấy nhân viên.');
+    employeeName = employee.name;
+  } else if (user.role !== 'admin') {
+    throw new Error('Nhân viên phải chọn tên thao tác.');
   }
 
-  profile.updatedAt = now_();
-  firebasePut_('profiles/' + safeKey_(user.uid), profile);
-  return profile;
+  const sh = getSheet_(CONFIG.SHEETS.PROFILES);
+  let rowIndex = findProfileRow_(user.uid);
+  if (!rowIndex) {
+    sh.appendRow([user.uid, user.email, user.role, id, employeeName, new Date()]);
+    rowIndex = sh.getLastRow();
+  } else {
+    sh.getRange(rowIndex, 1, 1, PROFILE_HEADERS.length).setValues([[
+      user.uid, user.email, user.role, id, employeeName, new Date()
+    ]]);
+  }
+  return normalizeProfile_(user, sh.getRange(rowIndex, 1, 1, PROFILE_HEADERS.length).getValues()[0]);
+}
+
+function normalizeProfile_(user, row) {
+  return {
+    uid: user.uid,
+    email: user.email,
+    role: user.role,
+    employeeId: String(row[3] || '').trim(),
+    employeeName: String(row[4] || '').trim()
+  };
+}
+
+function findProfileRow_(uid) {
+  const sh = getSheet_(CONFIG.SHEETS.PROFILES);
+  const last = sh.getLastRow();
+  if (last <= 1) return 0;
+  const cell = sh.getRange(2, 1, last - 1, 1)
+    .createTextFinder(String(uid))
+    .matchEntireCell(true)
+    .findNext();
+  return cell ? cell.getRow() : 0;
 }
 
 function searchTransactions_(user, payload) {
-  ensureAll_();
-  payload = payload || {};
-  const mode = payload.mode === 'fuzzy' ? 'fuzzy' : 'exact';
   const query = String(payload.query || '').trim();
-  const amount = parseAmountInput_(payload.amount);
-  const dateKey = parseDateKey_(payload.date);
-  const timeText = parseTimeText_(payload.time);
+  const amount = payload.amount === '' || payload.amount === null || payload.amount === undefined
+    ? null
+    : Number(payload.amount);
+  const dateKey = payload.date ? dateKeyFromInput_(payload.date) : '';
+  const time = String(payload.time || '').trim();
+  const mode = payload.mode === 'fuzzy' ? 'fuzzy' : 'exact';
 
-  if (!query && amount === null && !dateKey && !timeText) {
-    return { rows: [], message: 'Nhập dữ liệu để lọc.' };
+  if (!query && amount === null && !dateKey && !time) {
+    return { rows: [], total: 0, totalAmount: 0, message: 'Nhập dữ liệu tìm kiếm để lọc.' };
   }
-  if (user.role !== 'admin' && amount !== null && amount > 2000000) {
+  if (user.role !== 'admin' && amount !== null && amount > CONFIG.STAFF_AMOUNT_LIMIT) {
     throw new Error('Nhân viên chỉ được lọc số tiền từ 0 đến 2.000.000.');
   }
 
-  let rows = [];
-  if (dateKey) {
-    rows = firebaseQuery_('transactions', { orderBy: 'dateKey', equalTo: dateKey });
-  } else if (amount !== null) {
-    rows = firebaseQuery_('transactions', { orderBy: 'amount', equalTo: amount });
-  } else {
-    rows = firebaseQuery_('transactions', { orderBy: 'timestamp', limitToLast: CONFIG.MAX_TOTAL_ROWS_FOR_SHEET });
-  }
-
-  const exactNeedle = normalizeExact_(query);
-  const terms = normalizeText_(query).split(/\s+/).filter(Boolean);
-  const filtered = [];
-
-  rows.forEach(row => {
-    if (amount !== null && Number(row.amount || 0) !== amount) return;
-    if (dateKey && row.dateKey !== dateKey) return;
-    if (timeText && String(row.time || '').indexOf(timeText) !== 0) return;
-    if (query) {
-      const content = String(row.content || '');
-      if (mode === 'exact' && normalizeExact_(content).indexOf(exactNeedle) < 0) return;
-      if (mode === 'fuzzy') {
-        const haystack = row.contentNorm || normalizeText_(content);
-        if (!terms.every(term => haystack.indexOf(term) >= 0)) return;
-      }
-    }
-    filtered.push(row);
-  });
-
-  filtered.sort((a, b) => Number(b.timestamp || 0) - Number(a.timestamp || 0));
-  const limited = filtered.slice(0, CONFIG.MAX_SEARCH_ROWS);
   const canWrite = isUserAllowedToWrite_(user);
+  const rows = readDataRows_()
+    .filter(row => amount === null || Number(row.amount) === amount)
+    .filter(row => !dateKey || row.dateKey === dateKey)
+    .filter(row => !time || String(row.time || '').indexOf(time) === 0)
+    .filter(row => matchContent_(row.content, query, mode))
+    .sort((a, b) => b.timestamp - a.timestamp);
 
+  const limited = rows.slice(0, CONFIG.MAX_SEARCH_ROWS);
   return {
-    rows: limited.map(row => formatRowForWeb_(row, firebaseGet_('transactionActions/' + safeKey_(row.id)) || {}, canWrite)),
-    total: filtered.length,
-    message: filtered.length > limited.length ? 'Hiển thị ' + limited.length + '/' + filtered.length + ' dòng mới nhất.' : ''
+    rows: limited.map(row => formatRowForWeb_(row, canWrite)),
+    total: rows.length,
+    totalAmount: limited.reduce((sum, row) => sum + Number(row.amount || 0), 0),
+    message: rows.length > CONFIG.MAX_SEARCH_ROWS
+      ? 'Đang hiển thị 500 dòng mới nhất. Hãy lọc thêm ngày hoặc số tiền.'
+      : ''
   };
 }
 
 function setChecked_(user, payload) {
-  const id = safeKey_(payload && payload.id);
-  if (!id) throw new Error('Thiếu mã giao dịch.');
-  const checked = !!(payload && payload.checked);
-  const actor = requireWriteActor_(user);
+  const row = findDataRowById_(payload.id);
+  if (!row) throw new Error('Không tìm thấy giao dịch.');
+  const checked = !!payload.checked;
   if (!checked && user.role !== 'admin') throw new Error('Chỉ admin được bỏ tích.');
+  const actor = requireWriteActor_(user);
+  const sh = getSheet_(CONFIG.SHEETS.DATA);
+  const before = readDataRowAt_(row);
+  const actionAt = new Date();
 
-  const tx = firebaseGet_('transactions/' + id);
-  if (!tx) throw new Error('Không tìm thấy giao dịch.');
-  const before = firebaseGet_('transactionActions/' + id) || {};
-  const ts = now_();
-  const patch = checked
-    ? {
-        checked: true,
-        checkedAt: ts,
-        checkedByUid: user.uid,
-        checkedByEmail: user.email,
-        checkedByName: actor.name,
-        updatedAt: ts,
-        updatedByName: actor.name
-      }
-    : {
-        checked: false,
-        checkedAt: null,
-        checkedByUid: null,
-        checkedByEmail: null,
-        checkedByName: null,
-        updatedAt: before.note ? Number(before.noteAt || ts) : null,
-        updatedByName: before.note ? before.noteByName || actor.name : null
-      };
-  firebasePatch_('transactionActions/' + id, patch);
-  writeHistory_(actor, tx, checked ? 'checked' : 'unchecked', checked ? 'Tích chọn' : 'Bỏ tích', summarizeTx_(tx), before, Object.assign({}, before, patch));
-  updateSheetAction_(id);
-  return { ok: true };
+  if (checked) {
+    sh.getRange(row, 10, 1, 6).setValues([[true, before.note || '', actor.name, actionAt, before.createdAt || actionAt, actor.email]]);
+  } else {
+    sh.getRange(row, 10, 1, 6).setValues([[false, before.note || '', '', '', before.createdAt || actionAt, '']]);
+  }
+
+  const after = readDataRowAt_(row);
+  writeHistory_(actor, after, checked ? 'Tích chọn' : 'Bỏ tích', after.content, before, after);
+  return { row: formatRowForWeb_(after, true) };
 }
 
 function saveNote_(user, payload) {
-  const id = safeKey_(payload && payload.id);
-  if (!id) throw new Error('Thiếu mã giao dịch.');
-  const note = String((payload && payload.note) || '').trim().slice(0, 500);
+  const row = findDataRowById_(payload.id);
+  if (!row) throw new Error('Không tìm thấy giao dịch.');
   const actor = requireWriteActor_(user);
-  const tx = firebaseGet_('transactions/' + id);
-  if (!tx) throw new Error('Không tìm thấy giao dịch.');
-  const before = firebaseGet_('transactionActions/' + id) || {};
-  const ts = now_();
-  const patch = {
-    note,
-    noteAt: note ? ts : null,
-    noteByUid: note ? user.uid : null,
-    noteByEmail: note ? user.email : null,
-    noteByName: note ? actor.name : null,
-    updatedAt: note ? ts : before.checked ? Number(before.checkedAt || ts) : null,
-    updatedByName: note ? actor.name : before.checked ? before.checkedByName || actor.name : null
-  };
-  firebasePatch_('transactionActions/' + id, patch);
-  writeHistory_(actor, tx, 'note', note ? 'Ghi chú' : 'Xóa ghi chú', note ? summarizeTx_(tx) + ' | ' + note : summarizeTx_(tx), before, Object.assign({}, before, patch));
-  updateSheetAction_(id);
-  return { ok: true };
+  const note = String(payload.note || '').trim().slice(0, 500);
+  const sh = getSheet_(CONFIG.SHEETS.DATA);
+  const before = readDataRowAt_(row);
+  const actionAt = note || before.checked ? new Date() : '';
+  const actorName = note || before.checked ? actor.name : '';
+  const actorEmail = note || before.checked ? actor.email : '';
+
+  sh.getRange(row, 11, 1, 5).setValues([[note, actorName, actionAt, before.createdAt || new Date(), actorEmail]]);
+  const after = readDataRowAt_(row);
+  writeHistory_(actor, after, 'Ghi chú', note || 'Xóa ghi chú', before, after);
+  return { row: formatRowForWeb_(after, true) };
 }
 
 function getStats_(user, payload) {
-  ensureProfile_(user);
-  const fromKey = parseDateKey_(payload && payload.from) || firstDayOfMonthKey_();
-  const toKey = parseDateKey_(payload && payload.to) || todayKey_();
-  const actions = firebaseGet_('transactionActions') || {};
-  const rows = [];
-  const actorCounts = {};
-  let checkedCount = 0;
-  let noteCount = 0;
+  const range = getStatsRange_(payload);
+  const rows = readDataRows_()
+    .filter(row => row.checked || row.note)
+    .filter(row => row.actionAt && row.actionAt >= range.from && row.actionAt <= range.to)
+    .sort((a, b) => Number(b.actionAt || 0) - Number(a.actionAt || 0));
 
-  Object.keys(actions).forEach(id => {
-    const action = actions[id] || {};
-    const actionAt = Math.max(Number(action.checkedAt || 0), Number(action.noteAt || 0), Number(action.updatedAt || 0));
-    if (!actionAt) return;
-    const actionDateKey = dateKeyFromTs_(actionAt);
-    if (actionDateKey < fromKey || actionDateKey > toKey) return;
-    if (!action.checked && !action.note) return;
-    const tx = firebaseGet_('transactions/' + safeKey_(id));
-    if (!tx) return;
-    if (action.checked) checkedCount++;
-    if (action.note) noteCount++;
-    const actor = action.updatedByName || action.checkedByName || action.noteByName || '';
-    if (actor) actorCounts[actor] = (actorCounts[actor] || 0) + 1;
-    rows.push(formatRowForWeb_(tx, action, false));
+  const actorMap = {};
+  rows.forEach(row => {
+    const name = row.actorName || 'Không rõ';
+    actorMap[name] = (actorMap[name] || 0) + 1;
   });
 
-  rows.sort((a, b) => Number(b.actionAt || 0) - Number(a.actionAt || 0));
-  const actors = Object.keys(actorCounts)
-    .map(name => ({ name, count: actorCounts[name] }))
-    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, 'vi'));
-
   return {
-    rows,
-    summary: { checkedCount, noteCount, actors }
+    rows: rows.map(row => formatRowForWeb_(row, isUserAllowedToWrite_(user))),
+    summary: {
+      checkedCount: rows.filter(row => row.checked).length,
+      noteCount: rows.filter(row => row.note).length,
+      actors: Object.keys(actorMap)
+        .sort()
+        .map(name => ({ name, count: actorMap[name] }))
+    }
   };
 }
 
 function saveEmployees_(employees) {
-  const input = Array.isArray(employees) ? employees : [];
-  const data = {};
-  input.forEach(emp => {
-    const name = String(emp.name || '').trim().slice(0, 60);
+  const cleaned = [];
+  const used = {};
+  (employees || []).forEach(item => {
+    if (item && item.active === false) return;
+    const name = String(item && item.name || '').trim();
     if (!name) return;
-    const id = safeEmployeeId_(emp.id || name);
-    data[id] = {
+    let id = safeEmployeeId_(item.id || name);
+    if (!id) id = 'nv';
+    const base = id;
+    let n = 2;
+    while (used[id]) id = base + '_' + n++;
+    used[id] = true;
+    cleaned.push({
       id,
       name,
-      permission: emp.permission === 'read' ? 'read' : 'write',
-      active: emp.active !== false,
-      updatedAt: now_()
-    };
+      permission: item.permission === 'write' ? 'write' : 'read',
+      active: true
+    });
   });
-  firebasePut_('employees', data);
-  return { employees: readEmployees_() };
+  if (!cleaned.length) throw new Error('Cần ít nhất một nhân viên.');
+
+  const sh = getSheet_(CONFIG.SHEETS.EMPLOYEES);
+  clearBody_(sh, EMPLOYEE_HEADERS.length);
+  const now = new Date();
+  sh.getRange(2, 1, cleaned.length, EMPLOYEE_HEADERS.length).setValues(
+    cleaned.map(emp => [emp.id, emp.name, emp.permission, 'active', now])
+  );
+  return { employees: cleaned };
 }
 
 function getHistory_(monthInput) {
-  const month = parseMonth_(monthInput) || currentMonthKey_();
-  const rows = firebaseQuery_('history/' + month, { orderBy: 'createdAt', limitToLast: 500 });
-  rows.sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0));
-  return {
-    rows: rows.map(row => Object.assign({}, row, { createdAtText: formatDateTime_(row.createdAt) }))
-  };
+  const month = String(monthInput || currentMonthKey_()).replace(/[^\d]/g, '').slice(0, 6);
+  const sh = getSheet_(CONFIG.SHEETS.HISTORY);
+  if (sh.getLastRow() <= 1) return { rows: [] };
+  const values = sh.getRange(2, 1, sh.getLastRow() - 1, HISTORY_HEADERS.length).getValues();
+  const rows = values
+    .filter(row => String(row[1] || '') === month)
+    .map(row => ({
+      createdAt: coerceDate_(row[0]),
+      createdAtText: formatDateTime_(row[0]),
+      actorName: String(row[2] || ''),
+      actionText: String(row[4] || ''),
+      detail: String(row[5] || '')
+    }))
+    .sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0))
+    .slice(0, 500);
+  return { rows };
 }
 
 function deleteHistoryMonth_(monthInput) {
-  const month = parseMonth_(monthInput);
-  if (!month) throw new Error('Tháng không hợp lệ.');
-  firebaseDelete_('history/' + month);
+  const month = String(monthInput || '').replace(/[^\d]/g, '').slice(0, 6);
+  if (!month) throw new Error('Chọn tháng cần xóa.');
+  const sh = getSheet_(CONFIG.SHEETS.HISTORY);
+  for (let row = sh.getLastRow(); row >= 2; row--) {
+    if (String(sh.getRange(row, 2).getValue()) === month) sh.deleteRow(row);
+  }
   return { ok: true };
 }
 
 function syncGmailByDays_(days, actorEmail) {
+  days = Math.max(1, Math.min(30, Math.floor(days || 1)));
   ensureAll_();
-  days = Math.max(1, Math.min(31, Number(days || 1)));
+  const start = startDateForDays_(days);
+  const queryDays = Math.max(days + 1, 2);
+  const query = 'from:' + CONFIG.ACB_FROM + ' newer_than:' + queryDays + 'd';
+  const existing = {};
+  readDataRows_().forEach(row => existing[row.id] = true);
 
-  const lock = LockService.getScriptLock();
-  if (!lock.tryLock(30000)) {
-    throw new Error('Đang có lượt cập nhật khác chạy.');
-  }
+  let added = 0;
+  let duplicated = 0;
+  let skipped = 0;
+  const debugRows = [];
+  const newRows = [];
 
-  try {
-    const minKey = days === 1 ? todayKey_() : shiftDateKey_(days - 1);
-    const maxKey = todayKey_();
-    const query = 'from:' + CONFIG.ACB_FROM + ' newer_than:' + (days === 1 ? 2 : days + 1) + 'd';
-    const threads = GmailApp.search(query, 0, 500);
-    let added = 0;
-    let duplicated = 0;
-    let skipped = 0;
-    const debug = [];
-
+  for (let offset = 0; offset < CONFIG.MAX_GMAIL_THREADS; offset += 100) {
+    const threads = GmailApp.search(query, offset, 100);
+    if (!threads.length) break;
     threads.forEach(thread => {
       thread.getMessages().forEach(msg => {
         const parsed = parseAcbEmail_(msg);
         if (!parsed.ok) {
           skipped++;
-          if (debug.length < 30) debug.push([new Date(), msg.getId(), parsed.reason, parsed.snippet || '']);
+          debugRows.push([new Date(), msg.getId(), parsed.reason, parsed.snippet || '']);
           return;
         }
         const tx = parsed.data;
-        if (tx.dateKey < minKey || tx.dateKey > maxKey) {
+        if (Number(tx.timestamp || 0) < start.getTime()) {
           skipped++;
           return;
         }
-        if (tx.type !== 'Ghi có') {
-          skipped++;
-          return;
-        }
-
-        const id = safeKey_(tx.transactionCode || msg.getId());
-        if (firebaseGet_('transactions/' + id)) {
+        tx.gmailMessageId = msg.getId();
+        tx.id = buildId_(tx.transactionCode, tx.gmailMessageId, tx.timestamp, tx.amount);
+        if (existing[tx.id]) {
           duplicated++;
           return;
         }
-
-        tx.id = id;
-        tx.gmailMessageId = msg.getId();
-        tx.gmailThreadId = thread.getId();
-        tx.syncedAt = now_();
-        tx.contentNorm = normalizeText_(tx.content);
-        tx.contentExact = normalizeExact_(tx.content);
-        firebasePut_('transactions/' + id, tx);
-        appendTransactionToSheet_(tx);
+        existing[tx.id] = true;
         added++;
+        newRows.push(transactionToSheetRow_(tx));
       });
     });
-
-    if (debug.length) appendDebug_(debug);
-    writeSyncLog_('sync ' + days + ' ngày', added, duplicated, skipped, 'query=' + query + ' actor=' + (actorEmail || 'auto'));
-    firebasePush_('syncLogs/' + currentMonthKey_(), {
-      createdAt: now_(),
-      actorEmail: actorEmail || 'auto',
-      days,
-      query,
-      added,
-      duplicated,
-      skipped
-    });
-    sortDataSheet_();
-    return { added, duplicated, skipped };
-  } finally {
-    lock.releaseLock();
   }
+
+  if (newRows.length) {
+    const sh = getSheet_(CONFIG.SHEETS.DATA);
+    sh.getRange(sh.getLastRow() + 1, 1, newRows.length, DATA_HEADERS.length).setValues(newRows);
+    sortDataSheet_();
+  }
+  if (debugRows.length) appendRows_(getSheet_(CONFIG.SHEETS.DEBUG), debugRows);
+  writeSyncLog_(days === 1 ? 'Hôm nay' : days + ' ngày', added, duplicated, skipped, actorEmail || '');
+  return { added, duplicated, skipped };
 }
 
 function autoSyncToday() {
@@ -567,78 +543,107 @@ function autoSyncToday() {
 
 function setAutoSync_(minutes, actorEmail) {
   ScriptApp.getProjectTriggers().forEach(trigger => {
-    if (trigger.getHandlerFunction() === 'autoSyncToday') {
-      ScriptApp.deleteTrigger(trigger);
-    }
+    if (trigger.getHandlerFunction() === 'autoSyncToday') ScriptApp.deleteTrigger(trigger);
   });
 
+  let message = 'Đã tắt auto cập nhật.';
   if (minutes === 1 || minutes === 5) {
     ScriptApp.newTrigger('autoSyncToday').timeBased().everyMinutes(minutes).create();
-    updateSetting_('autoSyncMinutes', String(minutes), actorEmail);
-    return { message: 'Đã bật auto cập nhật mỗi ' + minutes + ' phút.' };
+    message = 'Đã bật auto cập nhật mỗi ' + minutes + ' phút.';
   }
-
-  updateSetting_('autoSyncMinutes', '0', actorEmail);
-  return { message: 'Đã tắt auto cập nhật.' };
+  updateSetting_('autoSyncMinutes', String(minutes === 1 || minutes === 5 ? minutes : 0), actorEmail);
+  return { minutes: minutes === 1 || minutes === 5 ? minutes : 0, message };
 }
 
 function isUserAllowedToWrite_(user) {
   if (user.role === 'admin') return true;
   const profile = ensureProfile_(user);
   if (!profile.employeeId) return false;
-  const employee = firebaseGet_('employees/' + safeEmployeeId_(profile.employeeId));
-  return !!(employee && employee.active !== false && employee.permission === 'write');
+  const employee = readEmployees_().find(emp => emp.id === profile.employeeId);
+  return !!employee && employee.permission === 'write';
 }
 
 function requireWriteActor_(user) {
-  const profile = ensureProfile_(user);
-  if (user.role === 'admin') {
-    return {
-      uid: user.uid,
-      email: user.email,
-      role: user.role,
-      name: profile.employeeName || 'Admin',
-      permission: 'write'
-    };
+  if (!isUserAllowedToWrite_(user)) {
+    throw new Error('Tài khoản này chỉ được xem hoặc chưa chọn nhân viên.');
   }
-
-  if (!profile.employeeId) throw new Error('Chọn nhân viên trước khi thao tác.');
-  const employee = firebaseGet_('employees/' + safeEmployeeId_(profile.employeeId));
-  if (!employee || employee.active === false) throw new Error('Nhân viên đã bị xóa hoặc chưa có quyền.');
-  if (employee.permission !== 'write') throw new Error('Nhân viên này chỉ được xem.');
-
+  const profile = ensureProfile_(user);
   return {
-    uid: user.uid,
-    email: user.email,
-    role: user.role,
-    employeeId: profile.employeeId,
-    name: employee.name,
-    permission: employee.permission
+    name: profile.employeeName || (user.role === 'admin' ? 'Admin' : ''),
+    email: user.email
   };
 }
 
 function requireAdmin_(user) {
-  if (!user || user.role !== 'admin') throw new Error('Chỉ admin được dùng chức năng này.');
+  if (!user || user.role !== 'admin') throw new Error('Chỉ admin được thao tác mục này.');
 }
 
-function formatRowForWeb_(row, action, canWrite) {
-  action = action || {};
-  const actionAt = Math.max(Number(action.checkedAt || 0), Number(action.noteAt || 0), Number(action.updatedAt || 0));
+function readDataRows_() {
+  const sh = getSheet_(CONFIG.SHEETS.DATA);
+  const last = sh.getLastRow();
+  if (last <= 1) return [];
+  const values = sh.getRange(2, 1, last - 1, DATA_HEADERS.length).getValues();
+  return values
+    .map((row, index) => sheetRowToObject_(row, index + 2))
+    .filter(row => row.id);
+}
+
+function readDataRowAt_(sheetRow) {
+  const sh = getSheet_(CONFIG.SHEETS.DATA);
+  return sheetRowToObject_(sh.getRange(sheetRow, 1, 1, DATA_HEADERS.length).getValues()[0], sheetRow);
+}
+
+function sheetRowToObject_(row, sheetRow) {
+  const date = coerceDate_(row[1] || row[3]);
+  const timestampDate = coerceDate_(row[3] || row[1]);
+  const actionAt = coerceDate_(row[12]);
+  const createdAt = coerceDate_(row[13]);
+  return {
+    sheetRow,
+    id: String(row[0] || '').trim(),
+    date,
+    dateKey: date ? dateKeyFromDate_(date) : '',
+    dateText: row[1] ? formatDate_(row[1]) : '',
+    time: String(row[2] || ''),
+    timestamp: timestampDate ? timestampDate.getTime() : 0,
+    type: String(row[4] || ''),
+    amount: Number(row[5] || 0),
+    content: String(row[6] || ''),
+    transactionCode: String(row[7] || ''),
+    gmailMessageId: String(row[8] || ''),
+    checked: row[9] === true || String(row[9]).toLowerCase() === 'true' || String(row[9]) === '.',
+    note: String(row[10] || ''),
+    actorName: String(row[11] || ''),
+    actionAt,
+    createdAt,
+    actorEmail: String(row[14] || '')
+  };
+}
+
+function findDataRowById_(id) {
+  const safeId = String(id || '').trim();
+  if (!safeId) return 0;
+  const sh = getSheet_(CONFIG.SHEETS.DATA);
+  if (sh.getLastRow() <= 1) return 0;
+  const found = sh.getRange(2, 1, sh.getLastRow() - 1, 1)
+    .createTextFinder(safeId)
+    .matchEntireCell(true)
+    .findNext();
+  return found ? found.getRow() : 0;
+}
+
+function formatRowForWeb_(row, canWrite) {
   return {
     id: row.id,
-    dateKey: row.dateKey || '',
-    dateText: row.dateText || formatDate_(row.timestamp),
-    time: row.time || '',
-    timestamp: row.timestamp || 0,
-    amount: Number(row.amount || 0),
-    content: row.content || '',
-    type: row.type || '',
-    transactionCode: row.transactionCode || '',
-    checked: !!action.checked,
-    note: String(action.note || ''),
-    actorName: action.updatedByName || action.checkedByName || action.noteByName || '',
-    actionAt,
-    actionAtText: actionAt ? formatDateTime_(actionAt) : '',
+    dateText: row.dateText,
+    time: row.time,
+    amount: row.amount,
+    content: row.content,
+    type: row.type,
+    checked: !!row.checked,
+    note: row.note || '',
+    actorName: row.actorName || '',
+    actionAtText: row.actionAt ? formatDateTime_(row.actionAt) : '',
     canWrite: !!canWrite
   };
 }
@@ -656,7 +661,6 @@ function parseAcbEmail_(msg) {
     .replace(/\n+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
-
   if (!flat) return { ok: false, reason: 'Không lấy được nội dung email', snippet: '' };
 
   const folded = foldText_(flat);
@@ -708,353 +712,234 @@ function buildTxInfo_(transactionCode, ddmmyy, time, fallbackDate) {
   const dd = Number(ddmmyy.slice(0, 2));
   const mm = Number(ddmmyy.slice(2, 4));
   const yy = Number(ddmmyy.slice(4, 6));
-  const year = 2000 + yy;
   const parts = time.split(':').map(Number);
-  const d = new Date(year, mm - 1, dd, parts[0], parts[1], parts[2]);
-  if (isNaN(d.getTime())) {
-    return parseTxInfo_('', fallbackDate || new Date());
-  }
+  const d = new Date(2000 + yy, mm - 1, dd, parts[0], parts[1], parts[2]);
+  if (isNaN(d.getTime())) return parseTxInfo_('', fallbackDate || new Date());
   return {
     transactionCode,
-    dateKey: Utilities.formatDate(d, CONFIG.TZ, 'yyyyMMdd'),
+    dateKey: dateKeyFromDate_(d),
     dateText: Utilities.formatDate(d, CONFIG.TZ, 'dd/MM/yyyy'),
     time,
     timestamp: d.getTime()
   };
 }
 
-function appendTransactionToSheet_(tx) {
-  const sh = SpreadsheetApp.getActive().getSheetByName(CONFIG.DATA_SHEET);
-  sh.appendRow([
-    tx.dateText,
-    tx.time,
-    new Date(Number(tx.timestamp || now_())),
-    tx.type,
-    tx.amount,
-    tx.content,
-    tx.transactionCode,
-    tx.gmailMessageId,
+function transactionToSheetRow_(tx) {
+  const ts = new Date(Number(tx.timestamp || Date.now()));
+  const id = tx.id || buildId_(tx.transactionCode, tx.gmailMessageId, tx.timestamp, tx.amount);
+  return [
+    id,
+    ts,
+    tx.time || Utilities.formatDate(ts, CONFIG.TZ, 'HH:mm:ss'),
+    ts,
+    tx.type || 'Ghi có',
+    Number(tx.amount || 0),
+    tx.content || '',
+    tx.transactionCode || '',
+    tx.gmailMessageId || '',
+    false,
     '',
     '',
     '',
-    '',
-    new Date()
-  ]);
-}
-
-function updateSheetAction_(id) {
-  const sh = SpreadsheetApp.getActive().getSheetByName(CONFIG.DATA_SHEET);
-  if (!sh || sh.getLastRow() < 2) return;
-  const values = sh.getRange(2, 7, sh.getLastRow() - 1, 2).getValues();
-  const action = firebaseGet_('transactionActions/' + safeKey_(id)) || {};
-  for (let i = 0; i < values.length; i++) {
-    const code = safeKey_(values[i][0]);
-    const gmailId = safeKey_(values[i][1]);
-    if (code === id || gmailId === id) {
-      const row = i + 2;
-      sh.getRange(row, 9, 1, 4).setValues([[
-        action.checked ? '.' : '',
-        action.note || '',
-        action.updatedByName || action.checkedByName || action.noteByName || '',
-        action.updatedAt ? new Date(Number(action.updatedAt)) : ''
-      ]]);
-      break;
-    }
-  }
+    new Date(),
+    ''
+  ];
 }
 
 function sortDataSheet_() {
-  const sh = SpreadsheetApp.getActive().getSheetByName(CONFIG.DATA_SHEET);
-  if (!sh || sh.getLastRow() < 3) return;
-  sh.getRange(2, 1, sh.getLastRow() - 1, sh.getLastColumn()).sort([{ column: 3, ascending: false }]);
+  const sh = getSheet_(CONFIG.SHEETS.DATA);
+  if (sh.getLastRow() <= 2) return;
+  sh.getRange(2, 1, sh.getLastRow() - 1, DATA_HEADERS.length)
+    .sort({ column: 4, ascending: false });
 }
 
-function writeHistory_(actor, tx, action, actionText, detail, before, after) {
-  const createdAt = now_();
-  firebasePush_('history/' + monthKeyFromTs_(createdAt), {
+function writeHistory_(actor, tx, actionText, detail, before, after) {
+  const createdAt = new Date();
+  getSheet_(CONFIG.SHEETS.HISTORY).appendRow([
     createdAt,
-    actorUid: actor.uid,
-    actorEmail: actor.email,
-    actorName: actor.name,
-    action,
+    monthKeyFromDate_(createdAt),
+    actor.name || '',
+    actor.email || '',
     actionText,
-    txId: tx.id || '',
-    detail: String(detail || '').slice(0, 900),
-    before: before || null,
-    after: after || null
-  });
+    detail || '',
+    tx.id || '',
+    JSON.stringify(historySnapshot_(before)),
+    JSON.stringify(historySnapshot_(after))
+  ]);
+}
+
+function historySnapshot_(row) {
+  return {
+    checked: !!(row && row.checked),
+    note: row && row.note || '',
+    actorName: row && row.actorName || '',
+    actionAt: row && row.actionAt ? row.actionAt.getTime() : ''
+  };
 }
 
 function writeSyncLog_(type, added, duplicated, skipped, note) {
-  const sh = SpreadsheetApp.getActive().getSheetByName(CONFIG.LOG_SHEET);
-  sh.appendRow([new Date(), type, added || 0, duplicated || 0, skipped || 0, note || '']);
-}
-
-function appendDebug_(rows) {
-  const sh = SpreadsheetApp.getActive().getSheetByName(CONFIG.DEBUG_SHEET);
-  sh.getRange(sh.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
+  getSheet_(CONFIG.SHEETS.LOG).appendRow([new Date(), type, added, duplicated, skipped, note || '']);
 }
 
 function updateSetting_(key, value, actorEmail) {
-  const sh = SpreadsheetApp.getActive().getSheetByName(CONFIG.SETTINGS_SHEET);
+  const sh = getSheet_(CONFIG.SHEETS.SETTINGS);
   const last = sh.getLastRow();
-  if (last >= 2) {
-    const keys = sh.getRange(2, 1, last - 1, 1).getValues().map(r => String(r[0] || ''));
-    const index = keys.indexOf(key);
-    if (index >= 0) {
-      sh.getRange(index + 2, 2, 1, 3).setValues([[value, new Date(), actorEmail || '']]);
-      return;
-    }
+  let row = 0;
+  if (last > 1) {
+    const found = sh.getRange(2, 1, last - 1, 1)
+      .createTextFinder(key)
+      .matchEntireCell(true)
+      .findNext();
+    row = found ? found.getRow() : 0;
   }
-  sh.appendRow([key, value, new Date(), actorEmail || '']);
+  const data = [key, value, new Date(), actorEmail || ''];
+  if (row) sh.getRange(row, 1, 1, SETTINGS_HEADERS.length).setValues([data]);
+  else sh.appendRow(data);
 }
 
-function firebaseGet_(path) {
-  return firebaseRequest_(path, 'get');
+function appendRows_(sheet, rows) {
+  if (!rows.length) return;
+  sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
 }
 
-function firebasePut_(path, value) {
-  return firebaseRequest_(path, 'put', value);
+function clearBody_(sheet, width) {
+  const last = sheet.getLastRow();
+  if (last > 1) sheet.getRange(2, 1, last - 1, width).clearContent();
 }
 
-function firebasePatch_(path, value) {
-  return firebaseRequest_(path, 'patch', value);
+function getSheet_(name) {
+  return SpreadsheetApp.getActive().getSheetByName(name);
 }
 
-function firebasePush_(path, value) {
-  return firebaseRequest_(path, 'post', value);
+function matchContent_(content, query, mode) {
+  if (!query) return true;
+  const source = foldText_(content);
+  const needle = foldText_(query);
+  if (!needle) return true;
+  if (mode === 'exact') return source.indexOf(needle) >= 0;
+  return needle.split(/\s+/).filter(Boolean).every(token => source.indexOf(token) >= 0);
 }
 
-function firebaseDelete_(path) {
-  return firebaseRequest_(path, 'delete');
+function getStatsRange_(payload) {
+  const now = new Date();
+  const from = payload && payload.from ? parseInputDate_(payload.from) : new Date(now.getFullYear(), now.getMonth(), 1);
+  const to = payload && payload.to ? parseInputDate_(payload.to) : now;
+  from.setHours(0, 0, 0, 0);
+  to.setHours(23, 59, 59, 999);
+  return { from, to };
 }
 
-function firebaseQuery_(path, query) {
-  const result = firebaseRequest_(path, 'get', null, query) || {};
-  return Object.keys(result).map(id => Object.assign({ id }, result[id] || {}));
+function startDateForDays_(days) {
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  if (days > 1) start.setDate(start.getDate() - days + 1);
+  return start;
 }
 
-function firebaseRequest_(path, method, value, query) {
-  const token = getServiceAccountAccessToken_();
-  let url = CONFIG.DATABASE_URL.replace(/\/$/, '') + '/' + path.replace(/^\/+/, '') + '.json?access_token=' + encodeURIComponent(token);
-  if (query) {
-    Object.keys(query).forEach(key => {
-      let v = query[key];
-      if (key === 'orderBy') v = JSON.stringify(v);
-      if (key === 'equalTo') v = JSON.stringify(v);
-      url += '&' + encodeURIComponent(key) + '=' + encodeURIComponent(v);
-    });
-  }
-  const options = {
-    method,
-    muteHttpExceptions: true
-  };
-  if (value !== undefined && value !== null) {
-    options.contentType = 'application/json';
-    options.payload = JSON.stringify(value);
-  }
-  const res = UrlFetchApp.fetch(url, options);
-  const code = res.getResponseCode();
-  const text = res.getContentText();
-  if (code < 200 || code >= 300) {
-    throw new Error('Firebase RTDB lỗi ' + code + ': ' + text);
-  }
-  return text ? parseJson_(text) : null;
-}
-
-function getServiceAccountAccessToken_() {
-  const cache = CacheService.getScriptCache();
-  const cached = cache.get('firebase_access_token');
-  if (cached) return cached;
-
-  const props = PropertiesService.getScriptProperties();
-  const clientEmail = props.getProperty('SERVICE_ACCOUNT_EMAIL');
-  let privateKey = props.getProperty('SERVICE_ACCOUNT_PRIVATE_KEY');
-  if (!clientEmail || !privateKey) {
-    throw new Error('Thiếu SERVICE_ACCOUNT_EMAIL hoặc SERVICE_ACCOUNT_PRIVATE_KEY trong Script Properties.');
-  }
-  privateKey = privateKey.replace(/\\n/g, '\n');
-
-  const nowSec = Math.floor(Date.now() / 1000);
-  const header = { alg: 'RS256', typ: 'JWT' };
-  const claim = {
-    iss: clientEmail,
-    scope: 'https://www.googleapis.com/auth/firebase.database https://www.googleapis.com/auth/userinfo.email',
-    aud: 'https://oauth2.googleapis.com/token',
-    iat: nowSec,
-    exp: nowSec + 3600
-  };
-  const unsigned = base64Url_(JSON.stringify(header)) + '.' + base64Url_(JSON.stringify(claim));
-  const signature = Utilities.computeRsaSha256Signature(unsigned, privateKey);
-  const jwt = unsigned + '.' + base64UrlBytes_(signature);
-  const res = UrlFetchApp.fetch('https://oauth2.googleapis.com/token', {
-    method: 'post',
-    payload: {
-      grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
-      assertion: jwt
-    },
-    muteHttpExceptions: true
-  });
-  const data = parseJson_(res.getContentText() || '{}');
-  if (!data.access_token) throw new Error('Không lấy được Firebase access token: ' + res.getContentText());
-  cache.put('firebase_access_token', data.access_token, 3300);
-  return data.access_token;
-}
-
-function base64Url_(text) {
-  return Utilities.base64EncodeWebSafe(text, Utilities.Charset.UTF_8).replace(/=+$/g, '');
-}
-
-function base64UrlBytes_(bytes) {
-  return Utilities.base64EncodeWebSafe(bytes).replace(/=+$/g, '');
-}
-
-function parseJson_(text) {
-  try { return JSON.parse(text); } catch (err) { return {}; }
-}
-
-function parseAmountInput_(value) {
-  if (value === null || value === undefined || value === '') return null;
-  const n = Number(String(value).replace(/[^\d]/g, ''));
-  return isFinite(n) ? n : null;
-}
-
-function parseMoneyText_(value) {
-  let s = String(value || '').trim();
-  if (/[.,]\d{2}$/.test(s)) s = s.slice(0, -3);
-  return Number(s.replace(/[^\d]/g, '') || 0);
-}
-
-function parseDateKey_(value) {
-  const s = String(value || '').trim();
-  let m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (m) return m[1] + m[2] + m[3];
-  m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-  if (m) return m[3] + m[2] + m[1];
-  m = s.match(/^(\d{8})$/);
-  if (m) return m[1];
-  return '';
-}
-
-function parseTimeText_(value) {
-  const m = String(value || '').trim().match(/^(\d{2}):(\d{2})/);
-  return m ? m[1] + ':' + m[2] : '';
-}
-
-function parseMonth_(value) {
-  const m = String(value || '').trim().match(/^(\d{4})-?(\d{2})$/);
-  return m ? m[1] + m[2] : '';
+function buildId_(transactionCode, messageId, timestamp, amount) {
+  if (transactionCode) return safeKey_(transactionCode);
+  const raw = [messageId || '', timestamp || '', amount || ''].join('|');
+  return safeKey_(raw || Utilities.getUuid());
 }
 
 function safeKey_(value) {
-  return String(value || '')
-    .trim()
-    .replace(/[.#$\[\]\/]/g, '_')
-    .replace(/\s+/g, '_')
-    .slice(0, 180);
+  const folded = foldText_(String(value || '').trim());
+  const clean = folded.replace(/[^a-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 140);
+  return clean || ('id_' + Utilities.getUuid().replace(/-/g, ''));
 }
 
 function safeEmployeeId_(value) {
-  const slug = normalizeText_(value).replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '');
-  return slug || ('nv_' + now_());
+  if (!String(value || '').trim()) return '';
+  return safeKey_(value).slice(0, 60);
 }
 
-function normalizeText_(value) {
-  return removeTone_(String(value || ''))
-    .toLowerCase()
-    .replace(/[^\w\s]/g, ' ')
+function dateKeyFromInput_(value) {
+  return String(value || '').replace(/[^\d]/g, '').slice(0, 8);
+}
+
+function parseInputDate_(value) {
+  const parts = String(value || '').split('-').map(Number);
+  if (parts.length !== 3) return new Date();
+  return new Date(parts[0], parts[1] - 1, parts[2]);
+}
+
+function dateKeyFromDate_(date) {
+  return Utilities.formatDate(coerceDate_(date) || new Date(), CONFIG.TZ, 'yyyyMMdd');
+}
+
+function monthKeyFromDate_(date) {
+  return Utilities.formatDate(coerceDate_(date) || new Date(), CONFIG.TZ, 'yyyyMM');
+}
+
+function currentMonthKey_() {
+  return Utilities.formatDate(new Date(), CONFIG.TZ, 'yyyyMM');
+}
+
+function formatDate_(date) {
+  const d = coerceDate_(date);
+  return d ? Utilities.formatDate(d, CONFIG.TZ, 'dd/MM/yyyy') : '';
+}
+
+function formatDateTime_(date) {
+  const d = coerceDate_(date);
+  return d ? Utilities.formatDate(d, CONFIG.TZ, 'dd/MM/yyyy HH:mm:ss') : '';
+}
+
+function coerceDate_(value) {
+  if (!value) return null;
+  if (Object.prototype.toString.call(value) === '[object Date]' && !isNaN(value.getTime())) return value;
+  const d = new Date(value);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+function parseMoneyText_(value) {
+  let text = String(value || '').trim();
+  const lastDot = text.lastIndexOf('.');
+  const lastComma = text.lastIndexOf(',');
+  if (lastDot > lastComma) text = text.replace(/,/g, '').replace(/\.\d+$/, '');
+  else text = text.replace(/\./g, '').replace(/,\d+$/, '');
+  return Number(text.replace(/[^\d]/g, '') || 0);
+}
+
+function cleanContent_(value) {
+  return String(value || '')
     .replace(/\s+/g, ' ')
+    .replace(/[.。]+$/g, '')
     .trim();
 }
 
-function normalizeExact_(value) {
-  return String(value || '').toLowerCase().replace(/\s+/g, ' ').trim();
-}
-
 function foldText_(value) {
-  return removeTone_(String(value || '')).toLowerCase().replace(/\s+/g, ' ').trim();
-}
-
-function removeTone_(value) {
   return String(value || '')
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .replace(/đ/g, 'd')
-    .replace(/Đ/g, 'D');
-}
-
-function cleanContent_(value) {
-  return String(value || '').replace(/\*/g, '').replace(/\s+/g, ' ').replace(/\.+$/g, '').trim();
+    .replace(/Đ/g, 'D')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function htmlToText_(html) {
   return String(html || '')
-    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
     .replace(/<br\s*\/?>/gi, '\n')
     .replace(/<\/p>/gi, '\n')
-    .replace(/<\/div>/gi, '\n')
-    .replace(/<\/tr>/gi, '\n')
-    .replace(/<\/td>/gi, ' ')
     .replace(/<[^>]+>/g, ' ');
 }
 
-function decodeHtml_(text) {
-  return String(text || '')
+function decodeHtml_(value) {
+  return String(value || '')
     .replace(/&nbsp;/g, ' ')
     .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&#(\d+);/g, function(_, dec) { return String.fromCharCode(Number(dec)); })
-    .replace(/&#x([0-9a-f]+);/gi, function(_, hex) { return String.fromCharCode(parseInt(hex, 16)); });
+    .replace(/&#39;/g, "'");
 }
 
-function summarizeTx_(tx) {
-  return String((tx.dateText || '') + ' ' + (tx.time || '') + ' | ' + formatMoney_(tx.amount) + ' | ' + (tx.content || '')).slice(0, 700);
-}
-
-function formatMoney_(value) {
-  return Number(value || 0).toLocaleString('vi-VN');
-}
-
-function now_() {
-  return Date.now();
-}
-
-function dateKeyFromDate_(d) {
-  return Utilities.formatDate(d, CONFIG.TZ, 'yyyyMMdd');
-}
-
-function dateKeyFromTs_(ts) {
-  return Utilities.formatDate(new Date(Number(ts)), CONFIG.TZ, 'yyyyMMdd');
-}
-
-function monthKeyFromTs_(ts) {
-  return Utilities.formatDate(new Date(Number(ts)), CONFIG.TZ, 'yyyyMM');
-}
-
-function currentMonthKey_() {
-  return monthKeyFromTs_(now_());
-}
-
-function todayKey_() {
-  return dateKeyFromTs_(now_());
-}
-
-function firstDayOfMonthKey_() {
-  return todayKey_().slice(0, 6) + '01';
-}
-
-function shiftDateKey_(daysBack) {
-  return dateKeyFromTs_(now_() - Number(daysBack || 0) * 24 * 60 * 60 * 1000);
-}
-
-function formatDate_(ts) {
-  return ts ? Utilities.formatDate(new Date(Number(ts)), CONFIG.TZ, 'dd/MM/yyyy') : '';
-}
-
-function formatDateTime_(ts) {
-  return ts ? Utilities.formatDate(new Date(Number(ts)), CONFIG.TZ, 'dd/MM/yyyy HH:mm:ss') : '';
+function parseJson_(value) {
+  try {
+    return JSON.parse(value || '{}');
+  } catch (err) {
+    return {};
+  }
 }

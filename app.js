@@ -115,6 +115,9 @@ onAuthStateChanged(auth, async (user) => {
     setupDefaultDates();
     renderShell();
     showMain();
+    if (state.profile && state.profile.role === "staff" && !state.profile.employeeId) {
+      window.setTimeout(openEmployeeDialog, 0);
+    }
     await loadStats();
   } catch (error) {
     console.error(error);
