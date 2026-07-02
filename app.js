@@ -40,6 +40,7 @@ const state = {
   statsRows: [],
   statsSummary: null,
   statsFilter: null,
+  statsLoaded: false,
   permissionDraft: [],
 };
 
@@ -118,7 +119,6 @@ onAuthStateChanged(auth, async (user) => {
     if (state.profile && state.profile.role === "staff" && !state.profile.employeeId) {
       window.setTimeout(openEmployeeDialog, 0);
     }
-    await loadStats();
   } catch (error) {
     console.error(error);
     localStorage.removeItem("ttckAppsScriptSession");
@@ -163,7 +163,7 @@ document.querySelectorAll(".tab-btn[data-tab]").forEach((button) => {
     const tab = button.dataset.tab;
     state.tab = tab;
     switchTab(tab);
-    if (tab === "stats") await loadStats();
+    if (tab === "stats" && !state.statsLoaded) await loadStats();
   });
 });
 
@@ -192,6 +192,11 @@ elements.amountInput.addEventListener("input", () => {
 });
 
 elements.statsLoadBtn.addEventListener("click", loadStats);
+[elements.statsFrom, elements.statsTo].forEach((input) => {
+  input.addEventListener("change", () => {
+    state.statsLoaded = false;
+  });
+});
 elements.syncTodayBtn.addEventListener("click", () => syncGmail(1));
 elements.sync10DaysBtn.addEventListener("click", () => syncGmail(10));
 elements.chooseEmployeeBtn.addEventListener("click", openEmployeeDialog);
@@ -377,6 +382,7 @@ async function loadStats() {
     state.statsRows = data.rows || [];
     state.statsSummary = data.summary || {};
     state.statsFilter = null;
+    state.statsLoaded = true;
     renderStats();
     setReady("Đã tải thống kê");
   } catch (error) {
@@ -389,8 +395,8 @@ function renderStats() {
   const summary = state.statsSummary || {};
   const actors = summary.actors || [];
   const chips = [
-    { type: "checked", label: `Tổng tích chọn: ${summary.checkedCount || 0}` },
-    { type: "note", label: `Tổng ghi chú: ${summary.noteCount || 0}` },
+    { type: "checked", label: `Tích chọn ${summary.checkedCount || 0}` },
+    { type: "note", label: `Ghi chú ${summary.noteCount || 0}` },
     ...actors.map((actor) => ({ type: "actor", value: actor.name, label: `${actor.name}: ${actor.count}` })),
   ];
 
@@ -447,6 +453,7 @@ async function syncGmail(days) {
     setReady(`Thêm mới ${data.added || 0}, trùng ${data.duplicated || 0}`);
     showToast(`Đã cập nhật: thêm ${data.added || 0}, trùng ${data.duplicated || 0}`);
     if (hasFilters()) await searchTransactions();
+    state.statsLoaded = false;
   } catch (error) {
     showToast(readError(error));
     setReady("Lỗi cập nhật Gmail");
@@ -564,7 +571,9 @@ async function loadHistory() {
   if (!isAdmin()) return;
   try {
     const data = await callApi("getHistory", { month: normalizeMonth(elements.historyMonth.value) });
-    elements.historyBody.innerHTML = (data.rows || [])
+    const rows = data.rows || [];
+    elements.historyBody.innerHTML = rows.length
+      ? rows
       .map((row) => `
         <tr>
           <td>${escapeHtml(row.createdAtText || "")}</td>
@@ -573,7 +582,8 @@ async function loadHistory() {
           <td>${escapeHtml(row.detail || "")}</td>
         </tr>
       `)
-      .join("");
+      .join("")
+      : `<tr><td colspan="4">Chưa có lịch sử trong tháng này.</td></tr>`;
   } catch (error) {
     showToast(readError(error));
   }

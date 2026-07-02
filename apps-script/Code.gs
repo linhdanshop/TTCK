@@ -187,7 +187,6 @@ function createSession_(user) {
 function ensureAll_() {
   ensureSheets_();
   ensureEmployees_();
-  fillMissingDataIds_();
 }
 
 function ensureSheets_() {
@@ -506,7 +505,7 @@ function syncGmailByDays_(days, actorEmail) {
         const parsed = parseAcbEmail_(msg);
         if (!parsed.ok) {
           skipped++;
-          debugRows.push([new Date(), msg.getId(), parsed.reason, parsed.snippet || '']);
+          if (!parsed.silent) debugRows.push([new Date(), msg.getId(), parsed.reason, parsed.snippet || '']);
           return;
         }
         const tx = parsed.data;
@@ -663,9 +662,13 @@ function parseAcbEmail_(msg) {
     .trim();
   if (!flat) return { ok: false, reason: 'Không lấy được nội dung email', snippet: '' };
 
-  const folded = foldText_(flat);
-  const amountMatch = folded.match(/\bgiao dich moi nhat\s*:?\s*ghi co\s*\+?\s*([\d,.]+)\s*vnd/i)
-    || folded.match(/\bghi co\s*\+?\s*([\d,.]+)\s*vnd/i);
+  const folded = foldText_(flat).replace(/\*/g, ' ');
+  if (/\bgiao dich moi nhat\s*:?\s*ghi no\b/i.test(folded) || /\bghi no\s*-?\s*[\d,.]+\s*vnd\b/i.test(folded)) {
+    return { ok: false, silent: true, reason: 'Bỏ qua Ghi nợ', snippet: '' };
+  }
+
+  const amountMatch = folded.match(/\bgiao dich moi nhat\s*:?\s*ghi co\s*[^0-9+-]*\+?\s*([\d,.]+)\s*vnd/i)
+    || folded.match(/\bghi co\s*[^0-9+-]*\+?\s*([\d,.]+)\s*vnd/i);
   if (!amountMatch) return { ok: false, reason: 'Không tìm thấy Ghi có + số tiền', snippet: flat.slice(0, 500) };
 
   const contentMatch = flat.match(/Nội dung giao dịch\s*:?\s*([\s\S]*?)(?:Cảm ơn|Trân trọng|$)/i);
@@ -904,7 +907,9 @@ function parseMoneyText_(value) {
 function cleanContent_(value) {
   return String(value || '')
     .replace(/\s+/g, ' ')
+    .replace(/^\*+|\*+$/g, '')
     .replace(/[.。]+$/g, '')
+    .replace(/^\*+|\*+$/g, '')
     .trim();
 }
 
