@@ -57,6 +57,8 @@ const state = {
   dailyAutoTimer: null,
   dailyAutoRunning: false,
   searchToken: 0,
+  rowSaveQueues: new Map(),
+  rowVersions: new Map(),
 };
 
 const $ = (id) => document.getElementById(id);
@@ -419,45 +421,115 @@ async function onCheckedChange(event) {
   const tr = input.closest("tr");
   const id = tr.dataset.id;
   const checked = input.checked;
-  input.disabled = true;
-  try {
-    const firebaseIdToken = await getCurrentFirebaseIdToken();
-    const data = await callApi("setChecked", { id, checked, firebaseIdToken });
-    updateFilteredRow(data.row);
-    mirrorActionToRealtime(data.row).catch(console.warn);
+  const before = getFilteredRow(id);
+  const version = nextRowVersion(id);
+  const optimistic = buildOptimisticActionRow(before, { checked });
+  updateFilteredRow(optimistic);
+  mirrorActionToRealtime(optimistic).catch(console.warn);
+  queueRowSave(id, version, async () => {
+    const data = await callApi("setChecked", { id, checked });
+    if (isCurrentRowVersion(id, version)) {
+      updateFilteredRow(data.row);
+      mirrorActionToRealtime(data.row).catch(console.warn);
+    }
     state.statsLoaded = false;
-  } catch (error) {
-    input.checked = !checked;
-    showToast(readError(error));
-    if (isSlowApiError(error) && hasFilters()) await searchTransactions();
-  } finally {
-    input.disabled = false;
-  }
+  }).catch(async (error) => {
+    if (isCurrentRowVersion(id, version)) {
+      updateFilteredRow(before);
+      showToast(readError(error));
+      if (isSlowApiError(error) && hasFilters()) await searchTransactions();
+    }
+  });
 }
 
 async function onNoteBlur(event) {
   const input = event.currentTarget;
   const tr = input.closest("tr");
   const id = tr.dataset.id;
-  input.disabled = true;
-  try {
-    const firebaseIdToken = await getCurrentFirebaseIdToken();
-    const data = await callApi("saveNote", { id, note: input.value.trim(), firebaseIdToken });
-    updateFilteredRow(data.row);
-    mirrorActionToRealtime(data.row).catch(console.warn);
+  const note = input.value.trim();
+  const before = getFilteredRow(id);
+  if (before && String(before.note || "") === note) return;
+  const version = nextRowVersion(id);
+  const optimistic = buildOptimisticActionRow(before, { note });
+  updateFilteredRow(optimistic);
+  mirrorActionToRealtime(optimistic).catch(console.warn);
+  queueRowSave(id, version, async () => {
+    const data = await callApi("saveNote", { id, note });
+    if (isCurrentRowVersion(id, version)) {
+      updateFilteredRow(data.row);
+      mirrorActionToRealtime(data.row).catch(console.warn);
+    }
     state.statsLoaded = false;
-  } catch (error) {
-    showToast(readError(error));
-    if (isSlowApiError(error) && hasFilters()) await searchTransactions();
-  } finally {
-    input.disabled = false;
-  }
+  }).catch(async (error) => {
+    if (isCurrentRowVersion(id, version)) {
+      updateFilteredRow(before);
+      showToast(readError(error));
+      if (isSlowApiError(error) && hasFilters()) await searchTransactions();
+    }
+  });
 }
 
 function updateFilteredRow(row) {
   if (!row || !row.id) return;
   state.filteredRows = state.filteredRows.map((item) => (item.id === row.id ? { ...item, ...row } : item));
   renderFiltered();
+}
+
+function getFilteredRow(id) {
+  return state.filteredRows.find((item) => item.id === id) || null;
+}
+
+function nextRowVersion(id) {
+  const next = Number(state.rowVersions.get(id) || 0) + 1;
+  state.rowVersions.set(id, next);
+  return next;
+}
+
+function isCurrentRowVersion(id, version) {
+  return Number(state.rowVersions.get(id) || 0) === Number(version || 0);
+}
+
+function queueRowSave(id, version, task) {
+  const previous = state.rowSaveQueues.get(id) || Promise.resolve();
+  const current = previous.catch(() => {}).then(task);
+  state.rowSaveQueues.set(id, current.finally(() => {
+    if (state.rowSaveQueues.get(id) === current && isCurrentRowVersion(id, version)) {
+      state.rowSaveQueues.delete(id);
+    }
+  }));
+  return current;
+}
+
+function buildOptimisticActionRow(row, patch) {
+  const base = row ? { ...row } : {};
+  const checked = patch.checked !== undefined ? !!patch.checked : !!base.checked;
+  const note = patch.note !== undefined ? String(patch.note || "") : String(base.note || "");
+  const actorName = note || checked ? currentActorName() : "";
+  const actionAtText = note || checked ? formatDateTimeLocal(new Date()) : "";
+  return {
+    ...base,
+    ...patch,
+    checked,
+    note,
+    actorName,
+    actionAtText,
+  };
+}
+
+function currentActorName() {
+  if (!state.profile) return "";
+  return state.profile.employeeName || (isAdmin() ? "Admin" : "");
+}
+
+function formatDateTimeLocal(date) {
+  const d = date instanceof Date ? date : new Date(date || Date.now());
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const yyyy = d.getFullYear();
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mi = String(d.getMinutes()).padStart(2, "0");
+  const ss = String(d.getSeconds()).padStart(2, "0");
+  return `${dd}/${mm}/${yyyy} ${hh}:${mi}:${ss}`;
 }
 
 async function searchRealtimeTransactions(payload) {
@@ -691,7 +763,6 @@ async function mirrorRowsToRealtime(rows) {
 async function mirrorActionToRealtime(row) {
   if (!auth.currentUser || !row || !row.id) return;
   const action = toRealtimeAction(row);
-  if (!action) return;
   await dbUpdate(dbRef(db), { [`actions/${row.id}`]: action });
 }
 
@@ -946,12 +1017,8 @@ async function saveDailyAuto() {
     state.settings = {
       ...(state.settings || {}),
       ...(data.settings || {}),
-      dailyAutoEnabled: data.settings && data.settings.dailyAutoEnabled !== undefined
-        ? data.settings.dailyAutoEnabled
-        : enabled,
-      dailyAutoTime: data.settings && data.settings.dailyAutoTime
-        ? data.settings.dailyAutoTime
-        : time,
+      dailyAutoEnabled: enabled,
+      dailyAutoTime: time,
     };
     renderDailyAutoControls();
     startDailyAutoWatcher();

@@ -754,7 +754,10 @@ function setDailyAuto_(payload, actorEmail) {
     ? 'Đã bật auto mỗi ngày lúc ' + time + ' khi web admin đang mở.'
     : 'Đã tắt auto mỗi ngày khi web admin đang mở.';
   writeSimpleHistory_({ name: 'Admin', email: actorEmail || '' }, 'Cài auto ngày', message);
-  return { settings: readSettings_(), message };
+  const settings = readSettings_();
+  settings.dailyAutoEnabled = enabled;
+  settings.dailyAutoTime = time;
+  return { settings, message };
 }
 
 function isUserAllowedToWrite_(user) {
@@ -1032,9 +1035,8 @@ function getRealtimeBaseUrl_(settings) {
 }
 
 function getRealtimeAuth_(settings, options) {
-  const firebaseIdToken = String(options && options.firebaseIdToken || '').trim();
-  if (firebaseIdToken) return { type: 'firebase', token: firebaseIdToken };
-
+  // Browser actions already mirror Realtime with Firebase Auth directly.
+  // Apps Script only mirrors in unattended triggers when a service account is configured.
   const serviceToken = getServiceAccountAccessToken_(settings);
   if (serviceToken) return { type: 'oauth', token: serviceToken };
 
@@ -1382,9 +1384,13 @@ function readSettings_() {
     : sh.getRange(2, 1, sh.getLastRow() - 1, SETTINGS_HEADERS.length).getValues();
   const map = {};
   DEFAULT_SETTINGS.forEach(item => map[item.key] = String(item.value || ''));
+  const seen = {};
   values.forEach(row => {
     const key = String(row[0] || '');
-    if (key) map[key] = String(row[1] || '');
+    if (key && !seen[key]) {
+      map[key] = String(row[1] || '');
+      seen[key] = true;
+    }
   });
   const settings = {
     autoSyncMinutes: Number(map.autoSyncMinutes || 0),
