@@ -30,7 +30,7 @@ const firebaseConfig = {
 
 // Dán URL Web App Apps Script sau khi deploy.
 // Ví dụ: https://script.google.com/macros/s/AKfycb.../exec
-const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxfSqZ9veQh1K64OY6z_15VWq0nzHxtIWXvsJQ9yIMNX4jNCfucY5F1zjrr5pdgPq2v/exec";
+const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyTY0N44s41DNl2E0KGHvpn5JM3c25a7g0dDYxopHS86HIzu9ZnY0a7WIycVFIiMjgx/exec";
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
@@ -418,7 +418,8 @@ async function onCheckedChange(event) {
   const checked = input.checked;
   input.disabled = true;
   try {
-    const data = await callApi("setChecked", { id, checked });
+    const firebaseIdToken = await getCurrentFirebaseIdToken();
+    const data = await callApi("setChecked", { id, checked, firebaseIdToken });
     updateFilteredRow(data.row);
     mirrorActionToRealtime(data.row).catch(console.warn);
     state.statsLoaded = false;
@@ -437,7 +438,8 @@ async function onNoteBlur(event) {
   const id = tr.dataset.id;
   input.disabled = true;
   try {
-    const data = await callApi("saveNote", { id, note: input.value.trim() });
+    const firebaseIdToken = await getCurrentFirebaseIdToken();
+    const data = await callApi("saveNote", { id, note: input.value.trim(), firebaseIdToken });
     updateFilteredRow(data.row);
     mirrorActionToRealtime(data.row).catch(console.warn);
     state.statsLoaded = false;
@@ -621,7 +623,8 @@ async function syncGmail(days) {
   const label = days === 1 ? "hôm nay" : "10 ngày trước";
   setBusy(`Đang cập nhật Gmail ${label}...`);
   try {
-    const data = await callApi("syncGmail", { days });
+    const firebaseIdToken = await getCurrentFirebaseIdToken();
+    const data = await callApi("syncGmail", { days, firebaseIdToken });
     const realtimeText = await resolveRealtimeMirrorText(data);
     setReady(`Thêm mới ${data.added || 0}, trùng ${data.duplicated || 0}${realtimeText}`);
     showToast(`Đã cập nhật: thêm ${data.added || 0}, trùng ${data.duplicated || 0}${realtimeText}`);
@@ -948,7 +951,8 @@ async function checkDailyAuto() {
   state.dailyAutoRunning = true;
   try {
     setBusy(`Auto ngày ${runTime}: đang cập nhật hôm nay...`);
-    const data = await callApi("syncGmail", { days: 1 });
+    const firebaseIdToken = await getCurrentFirebaseIdToken();
+    const data = await callApi("syncGmail", { days: 1, firebaseIdToken });
     const realtimeText = await resolveRealtimeMirrorText(data);
     localStorage.setItem(lastKey, today);
     state.statsLoaded = false;
@@ -1097,6 +1101,10 @@ function ensureApiUrl() {
   if (!APPS_SCRIPT_URL || APPS_SCRIPT_URL.includes("PASTE_APPS_SCRIPT")) {
     throw new Error("Chưa cấu hình Apps Script Web App URL trong app.js.");
   }
+}
+
+async function getCurrentFirebaseIdToken(force = false) {
+  return auth.currentUser ? auth.currentUser.getIdToken(force) : "";
 }
 
 function isAdmin() {

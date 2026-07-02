@@ -116,6 +116,16 @@ const DEFAULT_SETTINGS = [
     note: '1 là Apps Script tự ghi dữ liệu sang Realtime sau khi cập nhật Gmail, 0 là chỉ lưu Sheet.'
   },
   {
+    key: 'serviceAccountEmail',
+    value: '',
+    note: 'Tùy chọn cho trigger tự ghi Realtime. Dán client_email trong file service account JSON, để trống nếu chỉ dùng web admin đẩy Realtime.'
+  },
+  {
+    key: 'serviceAccountPrivateKey',
+    value: '',
+    note: 'Tùy chọn cho trigger tự ghi Realtime. Dán private_key, có thể giữ dạng \\n. Không đưa khóa này lên GitHub.'
+  },
+  {
     key: 'autoSyncMinutes',
     value: '0',
     note: '0 là tắt auto Apps Script trigger. Mốc hợp lệ: 1, 5, 10, 15, 30 phút.'
@@ -176,11 +186,11 @@ function route_(action, payload, idToken, session) {
       break;
 
     case 'setChecked':
-      data = setChecked_(user, payload);
+      data = setChecked_(user, payload, getPayloadFirebaseToken_(payload));
       break;
 
     case 'saveNote':
-      data = saveNote_(user, payload);
+      data = saveNote_(user, payload, getPayloadFirebaseToken_(payload));
       break;
 
     case 'getStats':
@@ -207,7 +217,11 @@ function route_(action, payload, idToken, session) {
       if (user.role !== 'admin' && syncDays !== 1) {
         throw new Error('Nhân viên chỉ được cập nhật hôm nay.');
       }
-      data = syncGmailByDays_(syncDays, user.email);
+      data = syncGmailByDays_(syncDays, user.email, {
+        firebaseIdToken: getPayloadFirebaseToken_(payload),
+        userRole: user.role,
+        userEmail: user.email
+      });
       break;
 
     case 'setAutoSync':
@@ -460,7 +474,7 @@ function searchTransactions_(user, payload) {
   };
 }
 
-function setChecked_(user, payload) {
+function setChecked_(user, payload, firebaseIdToken) {
   const row = findDataRowById_(payload.id);
   if (!row) throw new Error('Không tìm thấy giao dịch.');
   const checked = !!payload.checked;
@@ -479,11 +493,15 @@ function setChecked_(user, payload) {
 
   const after = readDataRowAt_(row);
   writeHistory_(actor, after, checked ? 'Tích chọn' : 'Bỏ tích', after.content, before, after);
-  mirrorRowsToRealtimeSafely_([formatRowForFirebase_(after)]);
+  mirrorRowsToRealtimeSafely_([formatRowForFirebase_(after)], {
+    firebaseIdToken,
+    userRole: user.role,
+    userEmail: user.email
+  });
   return { row: formatRowForWeb_(after, true) };
 }
 
-function saveNote_(user, payload) {
+function saveNote_(user, payload, firebaseIdToken) {
   const row = findDataRowById_(payload.id);
   if (!row) throw new Error('Không tìm thấy giao dịch.');
   const actor = requireWriteActor_(user);
@@ -498,7 +516,11 @@ function saveNote_(user, payload) {
   sh.getRange(row, 11, 1, 5).setValues([[note, actorName, actionAt, before.createdAt || new Date(), actorEmail]]);
   const after = readDataRowAt_(row);
   writeHistory_(actor, after, 'Ghi chú', note || 'Xóa ghi chú', before, after);
-  mirrorRowsToRealtimeSafely_([formatRowForFirebase_(after)]);
+  mirrorRowsToRealtimeSafely_([formatRowForFirebase_(after)], {
+    firebaseIdToken,
+    userRole: user.role,
+    userEmail: user.email
+  });
   return { row: formatRowForWeb_(after, true) };
 }
 
@@ -590,7 +612,7 @@ function deleteHistoryMonth_(monthInput) {
   return { ok: true };
 }
 
-function syncGmailByDays_(days, actorEmail) {
+function syncGmailByDays_(days, actorEmail, realtimeOptions) {
   days = Math.max(1, Math.min(30, Math.floor(days || 1)));
   ensureAll_();
   const start = startDateForDays_(days);
@@ -652,7 +674,7 @@ function syncGmailByDays_(days, actorEmail) {
     .sort((a, b) => b.timestamp - a.timestamp)
     .slice(0, 5000)
     .map(formatRowForFirebase_);
-  const firebaseMirror = mirrorRowsToRealtimeSafely_(firebaseRows);
+  const firebaseMirror = mirrorRowsToRealtimeSafely_(firebaseRows, realtimeOptions || {});
   return { added, duplicated, skipped, firebaseRows, firebaseMirror };
 }
 
@@ -895,11 +917,20 @@ function formatRowForFirebase_(row) {
   };
 }
 
-function mirrorRowsToRealtimeSafely_(rows) {
+function mirrorRowsToRealtimeSafely_(rows, options) {
   try {
-    return mirrorRowsToRealtime_(rows || [], readSettings_());
+    return mirrorRowsToRealtime_(rows || [], readSettings_(), options || {});
   } catch (err) {
     const message = err && err.message ? err.message : String(err);
+    if (message === '__REALTIME_NO_AUTH__') {
+      return {
+        ok: false,
+        skipped: true,
+        count: 0,
+        pathCount: 0,
+        error: 'Realtime chưa có Firebase token hoặc service account.'
+      };
+    }
     try {
       writeSyncLog_('Realtime lỗi', 0, 0, 0, message);
     } catch (logErr) {}
@@ -907,8 +938,9 @@ function mirrorRowsToRealtimeSafely_(rows) {
   }
 }
 
-function mirrorRowsToRealtime_(rows, settings) {
+function mirrorRowsToRealtime_(rows, settings, options) {
   settings = settings || readSettings_();
+  options = options || {};
   if (settings.realtimeMirrorEnabled === false) {
     return { ok: true, count: 0, pathCount: 0, disabled: true };
   }
@@ -916,14 +948,16 @@ function mirrorRowsToRealtime_(rows, settings) {
   const updates = {};
   const now = Date.now();
   let rowCount = 0;
+  const isStaffToken = !!options.firebaseIdToken && options.userRole !== 'admin';
+  const canWriteAdminPaths = !isStaffToken;
   (rows || []).forEach(row => {
     if (!row || !row.id) return;
     const id = firebaseKey_(row.id);
     const transaction = cleanRealtimeTransaction_(row);
-    updates['transactionsAdmin/' + id] = transaction;
+    if (canWriteAdminPaths) updates['transactionsAdmin/' + id] = transaction;
     if (Number(row.amount || 0) <= CONFIG.STAFF_AMOUNT_LIMIT) {
       updates['transactionsStaff/' + id] = transaction;
-    } else {
+    } else if (canWriteAdminPaths) {
       updates['transactionsStaff/' + id] = null;
     }
     const action = cleanRealtimeAction_(row);
@@ -931,15 +965,18 @@ function mirrorRowsToRealtime_(rows, settings) {
     rowCount++;
   });
 
-  updates['meta/lastMirror'] = {
-    at: now,
-    atText: Utilities.formatDate(new Date(now), CONFIG.TZ, 'dd/MM/yyyy HH:mm:ss'),
-    rowCount,
-    source: 'apps-script'
-  };
+  if (canWriteAdminPaths) {
+    updates['meta/lastMirror'] = {
+      at: now,
+      atText: Utilities.formatDate(new Date(now), CONFIG.TZ, 'dd/MM/yyyy HH:mm:ss'),
+      rowCount,
+      source: options.firebaseIdToken ? 'web-id-token' : 'apps-script'
+    };
+  }
 
   const pathCount = Object.keys(updates).length;
-  requestRealtime_('', 'patch', updates, settings);
+  if (!pathCount) return { ok: true, count: 0, pathCount: 0 };
+  requestRealtime_('', 'patch', updates, settings, options);
   return { ok: true, count: rowCount, pathCount };
 }
 
@@ -954,10 +991,13 @@ function testRealtimeConnection_() {
       at: now,
       atText: Utilities.formatDate(new Date(now), CONFIG.TZ, 'dd/MM/yyyy HH:mm:ss'),
       source: 'setupTTCK'
-    }, settings);
+    }, settings, {});
     return { ok: true, message: 'Realtime đã kết nối.' };
   } catch (err) {
     const message = err && err.message ? err.message : String(err);
+    if (message === '__REALTIME_NO_AUTH__') {
+      return { ok: true, message: 'Realtime sẽ ghi khi web gửi Firebase token. Trigger tự động cần service account trong CAI_DAT.' };
+    }
     try {
       writeSyncLog_('Realtime lỗi', 0, 0, 0, message);
     } catch (logErr) {}
@@ -965,17 +1005,17 @@ function testRealtimeConnection_() {
   }
 }
 
-function requestRealtime_(path, method, payload, settings) {
+function requestRealtime_(path, method, payload, settings, options) {
   const baseUrl = getRealtimeBaseUrl_(settings);
   if (!baseUrl) throw new Error('Chưa cấu hình realtimeDatabaseUrl trong CAI_DAT.');
   const cleanPath = String(path || '').replace(/^\/+/, '').replace(/\/+$/, '');
-  const url = baseUrl + '/' + (cleanPath ? cleanPath + '.json' : '.json');
+  const auth = getRealtimeAuth_(settings, options || {});
+  if (!auth || !auth.token) throw new Error('__REALTIME_NO_AUTH__');
+  const queryParam = auth.type === 'firebase' ? 'auth' : 'access_token';
+  const url = baseUrl + '/' + (cleanPath ? cleanPath + '.json' : '.json') + '?' + queryParam + '=' + encodeURIComponent(auth.token);
   const response = UrlFetchApp.fetch(url, {
     method: String(method || 'patch').toLowerCase(),
     contentType: 'application/json',
-    headers: {
-      Authorization: 'Bearer ' + ScriptApp.getOAuthToken()
-    },
     muteHttpExceptions: true,
     payload: JSON.stringify(payload)
   });
@@ -989,6 +1029,70 @@ function requestRealtime_(path, method, payload, settings) {
 function getRealtimeBaseUrl_(settings) {
   const url = String(settings && settings.realtimeDatabaseUrl || CONFIG.RTDB_URL || '').trim();
   return url.replace(/\/+$/, '');
+}
+
+function getRealtimeAuth_(settings, options) {
+  const firebaseIdToken = String(options && options.firebaseIdToken || '').trim();
+  if (firebaseIdToken) return { type: 'firebase', token: firebaseIdToken };
+
+  const serviceToken = getServiceAccountAccessToken_(settings);
+  if (serviceToken) return { type: 'oauth', token: serviceToken };
+
+  return null;
+}
+
+function getPayloadFirebaseToken_(payload) {
+  return String(payload && payload.firebaseIdToken || '').trim();
+}
+
+function getServiceAccountAccessToken_(settings) {
+  const email = String(settings && settings.serviceAccountEmail || '').trim();
+  const privateKey = normalizePrivateKey_(settings && settings.serviceAccountPrivateKey);
+  if (!email || !privateKey) return '';
+
+  const cache = CacheService.getScriptCache();
+  const cached = cache.get('ttck_service_account_access_token');
+  if (cached) return cached;
+
+  const now = Math.floor(Date.now() / 1000);
+  const header = { alg: 'RS256', typ: 'JWT' };
+  const claim = {
+    iss: email,
+    scope: 'https://www.googleapis.com/auth/firebase.database https://www.googleapis.com/auth/userinfo.email',
+    aud: 'https://oauth2.googleapis.com/token',
+    iat: now,
+    exp: now + 3600
+  };
+  const unsigned = base64Url_(JSON.stringify(header)) + '.' + base64Url_(JSON.stringify(claim));
+  const signature = Utilities.computeRsaSha256Signature(unsigned, privateKey);
+  const assertion = unsigned + '.' + base64Url_(signature);
+  const response = UrlFetchApp.fetch('https://oauth2.googleapis.com/token', {
+    method: 'post',
+    payload: {
+      grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+      assertion
+    },
+    muteHttpExceptions: true
+  });
+  const code = response.getResponseCode();
+  const text = response.getContentText();
+  if (code < 200 || code >= 300) {
+    throw new Error('Không lấy được service account token (' + code + '): ' + text.slice(0, 300));
+  }
+  const data = JSON.parse(text || '{}');
+  if (!data.access_token) throw new Error('Service account không trả access_token.');
+  cache.put('ttck_service_account_access_token', data.access_token, Math.max(60, Number(data.expires_in || 3600) - 120));
+  return data.access_token;
+}
+
+function normalizePrivateKey_(value) {
+  const key = String(value || '').trim();
+  return key ? key.replace(/\\n/g, '\n') : '';
+}
+
+function base64Url_(value) {
+  const bytes = typeof value === 'string' ? Utilities.newBlob(value).getBytes() : value;
+  return Utilities.base64EncodeWebSafe(bytes).replace(/=+$/g, '');
 }
 
 function cleanRealtimeTransaction_(row) {
@@ -1289,6 +1393,8 @@ function readSettings_() {
     dailySyncTimes: String(map.dailySyncTimes || '08:00,10:00,13:00,15:00,19:00').trim(),
     realtimeDatabaseUrl: String(map.realtimeDatabaseUrl || CONFIG.RTDB_URL).trim() || CONFIG.RTDB_URL,
     realtimeMirrorEnabled: map.realtimeMirrorEnabled !== '0',
+    serviceAccountEmail: String(map.serviceAccountEmail || '').trim(),
+    serviceAccountPrivateKey: String(map.serviceAccountPrivateKey || '').trim(),
     sourceEmail: String(map.sourceEmail || CONFIG.ACB_FROM).trim() || CONFIG.ACB_FROM,
     gmailExtraQuery: String(map.gmailExtraQuery || '').trim(),
     creditText: String(map.creditText || 'Ghi có').trim() || 'Ghi có',
