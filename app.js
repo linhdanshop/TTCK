@@ -622,13 +622,7 @@ async function syncGmail(days) {
   setBusy(`Đang cập nhật Gmail ${label}...`);
   try {
     const data = await callApi("syncGmail", { days });
-    let realtimeText = "";
-    if (data.firebaseRows && data.firebaseRows.length) {
-      const mirrored = await mirrorRowsToRealtime(data.firebaseRows);
-      realtimeText = `, Realtime ${mirrored.count} dòng`;
-    } else {
-      realtimeText = ", không có dòng để đẩy Realtime";
-    }
+    const realtimeText = await resolveRealtimeMirrorText(data);
     setReady(`Thêm mới ${data.added || 0}, trùng ${data.duplicated || 0}${realtimeText}`);
     showToast(`Đã cập nhật: thêm ${data.added || 0}, trùng ${data.duplicated || 0}${realtimeText}`);
     if (hasFilters()) await searchTransactions();
@@ -636,6 +630,27 @@ async function syncGmail(days) {
   } catch (error) {
     showToast(readError(error));
     setReady("Lỗi cập nhật Gmail");
+  }
+}
+
+async function resolveRealtimeMirrorText(data) {
+  const serverMirror = data && data.firebaseMirror;
+  if (serverMirror && serverMirror.disabled) return ", Realtime đang tắt";
+  if (serverMirror && serverMirror.ok) return `, Realtime server ${serverMirror.count || 0} dòng`;
+
+  const rows = data && Array.isArray(data.firebaseRows) ? data.firebaseRows : [];
+  if (!rows.length) {
+    return serverMirror && serverMirror.error
+      ? `, Realtime lỗi: ${serverMirror.error}`
+      : ", không có dòng để đẩy Realtime";
+  }
+
+  try {
+    const mirrored = await mirrorRowsToRealtime(rows);
+    return `, Realtime web ${mirrored.count} dòng`;
+  } catch (error) {
+    const serverText = serverMirror && serverMirror.error ? `${serverMirror.error}; ` : "";
+    return `, Realtime lỗi: ${serverText}${readError(error)}`;
   }
 }
 
@@ -934,9 +949,10 @@ async function checkDailyAuto() {
   try {
     setBusy(`Auto ngày ${runTime}: đang cập nhật hôm nay...`);
     const data = await callApi("syncGmail", { days: 1 });
+    const realtimeText = await resolveRealtimeMirrorText(data);
     localStorage.setItem(lastKey, today);
     state.statsLoaded = false;
-    setReady(`Auto ngày: thêm ${data.added || 0}, trùng ${data.duplicated || 0}`);
+    setReady(`Auto ngày: thêm ${data.added || 0}, trùng ${data.duplicated || 0}${realtimeText}`);
     if (hasFilters()) await searchTransactions();
   } catch (error) {
     showToast(readError(error));
@@ -992,8 +1008,8 @@ async function callApi(action, payload = {}, forceToken = false) {
 
 async function apiRequest(params) {
   const transports = [
-    ["fetch", fetchRequest],
     ["jsonp", jsonpRequest],
+    ["fetch", fetchRequest],
   ];
   const errors = [];
   for (const [name, request] of transports) {

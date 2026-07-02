@@ -4,28 +4,32 @@
     ".write": false,
     "transactionsAdmin": {
       ".read": "auth != null && (auth.token.email == 'kythuatlado@gmail.com' || auth.token.email == 'tranvanan180393@gmail.com')",
-      ".write": "auth != null && (auth.token.email == 'kythuatlado@gmail.com' || auth.token.email == 'tranvanan180393@gmail.com')",
+      ".write": "auth != null && (auth.token.email == 'kythuatlado@gmail.com' || auth.token.email == 'tranvanan180393@gmail.com' || auth.token.email == 'nguyenthingocnhung0703@gmail.com')",
       ".indexOn": ["timestamp", "dateKey", "amount"]
     },
     "transactionsStaff": {
       ".read": "auth != null && (auth.token.email == 'kythuatlado@gmail.com' || auth.token.email == 'tranvanan180393@gmail.com' || auth.token.email == 'shoplinhdan2026@gmail.com')",
-      ".write": "auth != null && (auth.token.email == 'kythuatlado@gmail.com' || auth.token.email == 'tranvanan180393@gmail.com' || auth.token.email == 'shoplinhdan2026@gmail.com')",
+      ".write": "auth != null && (auth.token.email == 'kythuatlado@gmail.com' || auth.token.email == 'tranvanan180393@gmail.com' || auth.token.email == 'nguyenthingocnhung0703@gmail.com')",
       ".indexOn": ["timestamp", "dateKey", "amount"],
       "$id": {
-        ".validate": "(newData.val() == null && (auth.token.email == 'kythuatlado@gmail.com' || auth.token.email == 'tranvanan180393@gmail.com')) || (newData.child('amount').isNumber() && newData.child('amount').val() <= 2000000 && newData.child('content').isString() && newData.child('timestamp').isNumber())"
+        ".validate": "(newData.val() == null && (auth.token.email == 'kythuatlado@gmail.com' || auth.token.email == 'tranvanan180393@gmail.com' || auth.token.email == 'nguyenthingocnhung0703@gmail.com')) || (newData.child('amount').isNumber() && newData.child('amount').val() <= 2000000 && newData.child('content').isString() && newData.child('timestamp').isNumber())"
       }
     },
     "actions": {
       "$id": {
         ".read": "auth != null && (auth.token.email == 'kythuatlado@gmail.com' || auth.token.email == 'tranvanan180393@gmail.com' || auth.token.email == 'shoplinhdan2026@gmail.com')",
-        ".write": "auth != null && ((auth.token.email == 'kythuatlado@gmail.com' || auth.token.email == 'tranvanan180393@gmail.com') || root.child('transactionsStaff').child($id).exists())",
+        ".write": "auth != null && ((auth.token.email == 'kythuatlado@gmail.com' || auth.token.email == 'tranvanan180393@gmail.com' || auth.token.email == 'nguyenthingocnhung0703@gmail.com') || root.child('transactionsStaff').child($id).exists())",
         ".validate": "newData.val() == null || (newData.child('checked').isBoolean() && newData.child('note').isString() && newData.child('actorName').isString() && newData.child('updatedAt').isNumber())"
       },
       ".indexOn": ["updatedAt"]
     },
+    "meta": {
+      ".read": "auth != null && (auth.token.email == 'kythuatlado@gmail.com' || auth.token.email == 'tranvanan180393@gmail.com')",
+      ".write": "auth != null && (auth.token.email == 'kythuatlado@gmail.com' || auth.token.email == 'tranvanan180393@gmail.com' || auth.token.email == 'nguyenthingocnhung0703@gmail.com')"
+    },
     "settings": {
       ".read": "auth != null && (auth.token.email == 'kythuatlado@gmail.com' || auth.token.email == 'tranvanan180393@gmail.com')",
-      ".write": "auth != null && (auth.token.email == 'kythuatlado@gmail.com' || auth.token.email == 'tranvanan180393@gmail.com')"
+      ".write": "auth != null && (auth.token.email == 'kythuatlado@gmail.com' || auth.token.email == 'tranvanan180393@gmail.com' || auth.token.email == 'nguyenthingocnhung0703@gmail.com')"
     },
     "history": {
       "$month": {
