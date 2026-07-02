@@ -102,12 +102,12 @@ const DEFAULT_SETTINGS = [
   {
     key: 'autoSyncMinutes',
     value: '0',
-    note: '0 là tắt auto Apps Script trigger, hoặc 1/5 phút nếu admin bật trong web.'
+    note: '0 là tắt auto Apps Script trigger. Mốc hợp lệ: 1, 5, 10, 15, 30 phút.'
   }
 ];
 
 function setupTTCK() {
-  ensureAll_();
+  ensureAll_(true);
   return 'Đã tạo/cập nhật sheet TTCK và tab CAI_DAT.';
 }
 
@@ -185,8 +185,11 @@ function route_(action, payload, idToken, session) {
       break;
 
     case 'syncGmail':
-      requireAdmin_(user);
-      data = syncGmailByDays_(Number(payload.days || 1), user.email);
+      const syncDays = Number(payload.days || 1);
+      if (user.role !== 'admin' && syncDays !== 10) {
+        throw new Error('Nhân viên chỉ được cập nhật 10 ngày trước.');
+      }
+      data = syncGmailByDays_(syncDays, user.email);
       break;
 
     case 'setAutoSync':
@@ -253,10 +256,14 @@ function createSession_(user) {
   return raw;
 }
 
-function ensureAll_() {
+function ensureAll_(force) {
+  const cache = CacheService.getScriptCache();
+  const key = 'ttck_ensure_v5';
+  if (!force && cache.get(key)) return;
   ensureSheets_();
   ensureEmployees_();
   ensureDefaultSettings_();
+  cache.put(key, '1', 600);
 }
 
 function ensureSheets_() {
@@ -322,11 +329,14 @@ function fillMissingDataIds_() {
 }
 
 function readEmployees_() {
+  const cache = CacheService.getScriptCache();
+  const cached = cache.get('ttck_employees_v1');
+  if (cached) return JSON.parse(cached);
   const sh = getSheet_(CONFIG.SHEETS.EMPLOYEES);
   const values = sh.getLastRow() <= 1
     ? []
     : sh.getRange(2, 1, sh.getLastRow() - 1, EMPLOYEE_HEADERS.length).getValues();
-  return values
+  const employees = values
     .map(row => ({
       id: safeEmployeeId_(row[0] || row[1]),
       name: String(row[1] || '').trim(),
@@ -334,6 +344,8 @@ function readEmployees_() {
       active: String(row[3] || 'active') !== 'inactive'
     }))
     .filter(emp => emp.id && emp.name && emp.active !== false);
+  cache.put('ttck_employees_v1', JSON.stringify(employees), 300);
+  return employees;
 }
 
 function ensureProfile_(user) {
@@ -524,6 +536,7 @@ function saveEmployees_(employees, actorEmail) {
   sh.getRange(2, 1, cleaned.length, EMPLOYEE_HEADERS.length).setValues(
     cleaned.map(emp => [emp.id, emp.name, emp.permission, 'active', now])
   );
+  CacheService.getScriptCache().put('ttck_employees_v1', JSON.stringify(cleaned), 300);
   writeSimpleHistory_({ name: 'Admin', email: actorEmail || '' }, 'Set quyền nhân viên', 'Cập nhật ' + cleaned.length + ' nhân viên');
   return { employees: cleaned };
 }
@@ -632,18 +645,24 @@ function buildGmailSearchQuery_(settings, queryDays) {
 }
 
 function setAutoSync_(minutes, actorEmail) {
+  minutes = Math.floor(Number(minutes || 0));
+  const allowed = [0, 1, 5, 10, 15, 30];
+  if (allowed.indexOf(minutes) < 0) {
+    throw new Error('Auto phút chỉ hỗ trợ 0, 1, 5, 10, 15 hoặc 30 phút.');
+  }
+
   ScriptApp.getProjectTriggers().forEach(trigger => {
     if (trigger.getHandlerFunction() === 'autoSyncToday') ScriptApp.deleteTrigger(trigger);
   });
 
-  let message = 'Đã tắt auto cập nhật.';
-  if (minutes === 1 || minutes === 5) {
+  let message = 'Đã tắt auto cập nhật theo phút.';
+  if (minutes > 0) {
     ScriptApp.newTrigger('autoSyncToday').timeBased().everyMinutes(minutes).create();
     message = 'Đã bật auto cập nhật mỗi ' + minutes + ' phút.';
   }
-  updateSetting_('autoSyncMinutes', String(minutes === 1 || minutes === 5 ? minutes : 0), actorEmail);
+  updateSetting_('autoSyncMinutes', String(minutes), actorEmail);
   writeSimpleHistory_({ name: 'Admin', email: actorEmail || '' }, 'Cài auto phút', message);
-  return { minutes: minutes === 1 || minutes === 5 ? minutes : 0, message };
+  return { minutes, settings: readSettings_(), message };
 }
 
 function setDailyAuto_(payload, actorEmail) {
@@ -977,6 +996,7 @@ function updateSetting_(key, value, actorEmail) {
   const data = [key, value, new Date(), actorEmail || '', currentNote || (defaultSetting && defaultSetting.note) || ''];
   if (row) sh.getRange(row, 1, 1, SETTINGS_HEADERS.length).setValues([data]);
   else sh.appendRow(data);
+  CacheService.getScriptCache().remove('ttck_settings_v2');
 }
 
 function ensureDefaultSettings_() {
@@ -1004,10 +1024,14 @@ function ensureDefaultSettings_() {
 
   if (rows.length) {
     sh.getRange(sh.getLastRow() + 1, 1, rows.length, SETTINGS_HEADERS.length).setValues(rows);
+    CacheService.getScriptCache().remove('ttck_settings_v2');
   }
 }
 
 function readSettings_() {
+  const cache = CacheService.getScriptCache();
+  const cached = cache.get('ttck_settings_v2');
+  if (cached) return JSON.parse(cached);
   const sh = getSheet_(CONFIG.SHEETS.SETTINGS);
   const values = sh.getLastRow() <= 1
     ? []
@@ -1018,7 +1042,7 @@ function readSettings_() {
     const key = String(row[0] || '');
     if (key) map[key] = String(row[1] || '');
   });
-  return {
+  const settings = {
     autoSyncMinutes: Number(map.autoSyncMinutes || 0),
     dailyAutoEnabled: map.dailyAutoEnabled === '1',
     dailyAutoTime: normalizeTime_(map.dailyAutoTime || '08:00'),
@@ -1031,6 +1055,8 @@ function readSettings_() {
     contentEndRegex: String(map.contentEndRegex || '$').trim() || '$',
     timeRegex: String(map.timeRegex || '').trim()
   };
+  cache.put('ttck_settings_v2', JSON.stringify(settings), 60);
+  return settings;
 }
 
 function appendRows_(sheet, rows) {

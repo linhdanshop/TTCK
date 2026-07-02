@@ -76,7 +76,7 @@
                 <i data-lucide="refresh-cw"></i>
                 Cập nhật hôm nay
               </button>
-              <button id="sync10DaysBtn" class="soft-btn admin-only" type="button" title="Lấy thêm các email ACB ghi có trong 10 ngày gần nhất. Giao dịch đã có sẽ bỏ qua.">
+              <button id="sync10DaysBtn" class="soft-btn" type="button" title="Lấy thêm các email ACB ghi có trong 10 ngày gần nhất. Giao dịch đã có sẽ bỏ qua.">
                 <i data-lucide="calendar-clock"></i>
                 Cập nhật 10 ngày trước
               </button>
@@ -175,10 +175,22 @@
           <h2>Cài auto cập nhật</h2>
           <button class="soft-btn" value="close" type="submit">Đóng</button>
         </div>
-        <div class="employee-choices">
-          <button class="employee-choice" type="button" data-auto="1">Mỗi 1 phút</button>
-          <button class="employee-choice" type="button" data-auto="5">Mỗi 5 phút</button>
-          <button class="employee-choice" type="button" data-auto="0">Tắt auto</button>
+        <div class="auto-minutes-box">
+          <label class="auto-time">
+            Auto cập nhật mỗi
+            <input id="autoMinutesInput" type="number" min="0" max="30" step="1" list="autoMinuteOptions" />
+            phút
+          </label>
+          <datalist id="autoMinuteOptions">
+            <option value="0"></option>
+            <option value="1"></option>
+            <option value="5"></option>
+            <option value="10"></option>
+            <option value="15"></option>
+            <option value="30"></option>
+          </datalist>
+          <button id="saveAutoMinutesBtn" class="success-btn" type="button">Lưu auto phút</button>
+          <p id="autoMinutesStatus" class="auto-status"></p>
         </div>
         <div class="auto-daily-box">
           <label class="auto-check">

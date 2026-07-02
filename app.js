@@ -92,6 +92,9 @@ const elements = {
   sync10DaysBtn: $("sync10DaysBtn"),
   autoSyncBtn: $("autoSyncBtn"),
   autoSyncDialog: $("autoSyncDialog"),
+  autoMinutesInput: $("autoMinutesInput"),
+  saveAutoMinutesBtn: $("saveAutoMinutesBtn"),
+  autoMinutesStatus: $("autoMinutesStatus"),
   dailyAutoEnabled: $("dailyAutoEnabled"),
   dailyAutoTime: $("dailyAutoTime"),
   saveDailyAutoBtn: $("saveDailyAutoBtn"),
@@ -224,6 +227,7 @@ elements.historyBtn.addEventListener("click", openHistoryDialog);
 elements.loadHistoryBtn.addEventListener("click", loadHistory);
 elements.deleteHistoryBtn.addEventListener("click", deleteHistoryMonth);
 elements.autoSyncBtn.addEventListener("click", openAutoSyncDialog);
+elements.saveAutoMinutesBtn.addEventListener("click", saveAutoMinutes);
 elements.saveDailyAutoBtn.addEventListener("click", saveDailyAuto);
 
 function showLogin(message = "") {
@@ -348,7 +352,7 @@ function renderActionRows(tbody, rows) {
       const canWrite = Boolean(row.canWrite);
       const checkedText = row.checked ? "." : "";
       return `
-        <tr data-id="${escapeAttr(row.id)}">
+        <tr class="${row.checked ? "is-checked" : ""}" data-id="${escapeAttr(row.id)}">
           <td>${escapeHtml(row.dateText || "")}</td>
           <td>${escapeHtml(row.time || "")}</td>
           <td>${formatMoney(row.amount)}</td>
@@ -383,8 +387,9 @@ async function onCheckedChange(event) {
   const checked = input.checked;
   input.disabled = true;
   try {
-    await callApi("setChecked", { id, checked });
-    await searchTransactions();
+    const data = await callApi("setChecked", { id, checked });
+    updateFilteredRow(data.row);
+    state.statsLoaded = false;
   } catch (error) {
     input.checked = !checked;
     showToast(readError(error));
@@ -399,13 +404,20 @@ async function onNoteBlur(event) {
   const id = tr.dataset.id;
   input.disabled = true;
   try {
-    await callApi("saveNote", { id, note: input.value.trim() });
-    await searchTransactions();
+    const data = await callApi("saveNote", { id, note: input.value.trim() });
+    updateFilteredRow(data.row);
+    state.statsLoaded = false;
   } catch (error) {
     showToast(readError(error));
   } finally {
     input.disabled = false;
   }
+}
+
+function updateFilteredRow(row) {
+  if (!row || !row.id) return;
+  state.filteredRows = state.filteredRows.map((item) => (item.id === row.id ? { ...item, ...row } : item));
+  renderFiltered();
 }
 
 async function loadStats() {
@@ -458,7 +470,7 @@ function renderStats() {
   const rows = filterStatsRows(state.statsRows);
   elements.statsBody.innerHTML = rows
     .map((row) => `
-      <tr>
+      <tr class="${row.checked ? "is-checked" : ""}">
         <td>${escapeHtml(row.dateText || "")}</td>
         <td>${escapeHtml(row.time || "")}</td>
         <td>${formatMoney(row.amount)}</td>
@@ -482,7 +494,7 @@ function filterStatsRows(rows) {
 }
 
 async function syncGmail(days) {
-  if (!isAdmin()) return;
+  if (!isAdmin() && days !== 10) return;
   const label = days === 1 ? "hôm nay" : "10 ngày trước";
   setBusy(`Đang cập nhật Gmail ${label}...`);
   try {
@@ -646,27 +658,37 @@ function openAutoSyncDialog() {
   if (!isAdmin()) return;
   renderDailyAutoControls();
   elements.autoSyncDialog.showModal();
-  elements.autoSyncDialog.querySelectorAll("[data-auto]").forEach((button) => {
-    button.onclick = async () => {
-      const minutes = Number(button.dataset.auto || 0);
-      try {
-        const data = await callApi("setAutoSync", { minutes });
-        showToast(data.message || "Đã cập nhật auto");
-        elements.autoSyncDialog.close();
-      } catch (error) {
-        showToast(readError(error));
-      }
-    };
-  });
 }
 
 function renderDailyAutoControls() {
   const settings = state.settings || {};
+  const minutes = Number(settings.autoSyncMinutes || 0);
+  elements.autoMinutesInput.value = minutes ? String(minutes) : "0";
+  elements.autoMinutesStatus.textContent = minutes
+    ? `Đang bật auto cập nhật mỗi ${minutes} phút.`
+    : "Đang tắt auto cập nhật theo phút.";
   elements.dailyAutoEnabled.checked = !!settings.dailyAutoEnabled;
   elements.dailyAutoTime.value = settings.dailyAutoTime || "08:00";
   elements.dailyAutoStatus.textContent = settings.dailyAutoEnabled
     ? `Đang bật: mỗi ngày lúc ${elements.dailyAutoTime.value} nếu web admin đang mở.`
     : "Đang tắt auto ngày.";
+}
+
+async function saveAutoMinutes() {
+  if (!isAdmin()) return;
+  const minutes = Number(elements.autoMinutesInput.value || 0);
+  if (![0, 1, 5, 10, 15, 30].includes(minutes)) {
+    showToast("Auto phút chỉ hỗ trợ 0, 1, 5, 10, 15 hoặc 30 phút");
+    return;
+  }
+  try {
+    const data = await callApi("setAutoSync", { minutes });
+    state.settings = data.settings || state.settings || {};
+    renderDailyAutoControls();
+    showToast(data.message || "Đã cập nhật auto phút");
+  } catch (error) {
+    showToast(readError(error));
+  }
 }
 
 async function saveDailyAuto() {
@@ -747,7 +769,7 @@ async function callApi(action, payload = {}, forceToken = false) {
   if (forceToken || !state.session) {
     const user = auth.currentUser;
     if (!user) throw new Error("Cần đăng nhập Gmail.");
-    params.idToken = await user.getIdToken(true);
+    params.idToken = await user.getIdToken(forceToken && Boolean(state.session));
   }
 
   const result = await apiRequest(params);
@@ -767,12 +789,7 @@ async function callApi(action, payload = {}, forceToken = false) {
 }
 
 async function apiRequest(params) {
-  try {
-    return await fetchRequest(params);
-  } catch (error) {
-    console.warn("Fetch Apps Script failed, fallback to JSONP", error);
-    return jsonpRequest(params);
-  }
+  return jsonpRequest(params);
 }
 
 async function fetchRequest(params) {
