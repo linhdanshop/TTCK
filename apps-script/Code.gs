@@ -423,7 +423,7 @@ function searchTransactions_(user, payload) {
   }
 
   const canWrite = isUserAllowedToWrite_(user);
-  const rows = readDataRows_()
+  const rows = readSearchCandidateRows_(query, mode)
     .filter(row => canSeeAmount_(user, row))
     .filter(row => amount === null || Number(row.amount) === amount)
     .filter(row => !dateKey || row.dateKey === dateKey)
@@ -718,6 +718,45 @@ function readDataRows_() {
   return values
     .map((row, index) => sheetRowToObject_(row, index + 2))
     .filter(row => row.id);
+}
+
+function readSearchCandidateRows_(query, mode) {
+  const needle = searchCandidateNeedle_(query, mode);
+  if (!needle || needle.length < 3) return readDataRows_();
+
+  const sh = getSheet_(CONFIG.SHEETS.DATA);
+  const last = sh.getLastRow();
+  if (last <= 1) return [];
+
+  const ranges = sh.getRange(2, 7, last - 1, 1)
+    .createTextFinder(needle)
+    .matchCase(false)
+    .findAll();
+
+  if (!ranges.length || ranges.length > 500) return readDataRows_();
+
+  const rows = [];
+  const seen = {};
+  ranges.forEach(range => {
+    const rowNumber = range.getRow();
+    if (seen[rowNumber]) return;
+    seen[rowNumber] = true;
+    const values = sh.getRange(rowNumber, 1, 1, DATA_HEADERS.length).getValues()[0];
+    const row = sheetRowToObject_(values, rowNumber);
+    if (row.id) rows.push(row);
+  });
+  return rows;
+}
+
+function searchCandidateNeedle_(query, mode) {
+  const text = String(query || '').trim();
+  if (!text) return '';
+  if (mode === 'exact') return text;
+  const tokens = text.split(/\s+/)
+    .map(token => token.trim())
+    .filter(token => token.length >= 3)
+    .sort((a, b) => b.length - a.length);
+  return tokens[0] || text;
 }
 
 function readDataRowAt_(sheetRow) {

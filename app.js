@@ -45,6 +45,7 @@ const state = {
   permissionDraft: [],
   dailyAutoTimer: null,
   dailyAutoRunning: false,
+  searchToken: 0,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -304,7 +305,12 @@ async function runSearchIfReady() {
 }
 
 async function searchTransactions() {
+  const token = ++state.searchToken;
   setBusy("Đang lọc dữ liệu...");
+  elements.searchBtn.disabled = true;
+  const slowTimer = setTimeout(() => {
+    if (token === state.searchToken) setBusy("Apps Script đang xử lý hơi lâu, chờ thêm chút...");
+  }, 8000);
   const parsedAmount = parseAmount(elements.amountInput.value);
   try {
     const data = await callApi("searchTransactions", {
@@ -314,6 +320,7 @@ async function searchTransactions() {
       date: elements.dateInput.value,
       time: elements.timeInput.value,
     });
+    if (token !== state.searchToken) return;
     const rows = data.rows || [];
     state.filteredRows = isAdmin()
       ? rows
@@ -321,8 +328,14 @@ async function searchTransactions() {
     renderFiltered();
     setReady(data.message || "Đã lọc xong");
   } catch (error) {
+    if (token !== state.searchToken) return;
     showToast(readError(error));
     setReady("Lỗi lọc dữ liệu");
+  } finally {
+    clearTimeout(slowTimer);
+    if (token === state.searchToken) {
+      elements.searchBtn.disabled = false;
+    }
   }
 }
 
@@ -681,13 +694,35 @@ async function saveAutoMinutes() {
     showToast("Auto phút chỉ hỗ trợ 0, 1, 5, 10, 15 hoặc 30 phút");
     return;
   }
+  const before = { ...(state.settings || {}) };
+  state.settings = { ...before, autoSyncMinutes: minutes };
+  renderDailyAutoControls();
+  elements.autoMinutesStatus.textContent = minutes
+    ? `Đang lưu: bật auto cập nhật mỗi ${minutes} phút...`
+    : "Đang lưu: tắt auto cập nhật theo phút...";
+  elements.saveAutoMinutesBtn.disabled = true;
   try {
     const data = await callApi("setAutoSync", { minutes });
-    state.settings = data.settings || state.settings || {};
+    const savedMinutes = Number(
+      data.settings && data.settings.autoSyncMinutes !== undefined
+        ? data.settings.autoSyncMinutes
+        : data.minutes !== undefined
+          ? data.minutes
+          : minutes,
+    );
+    state.settings = {
+      ...(state.settings || {}),
+      ...(data.settings || {}),
+      autoSyncMinutes: savedMinutes,
+    };
     renderDailyAutoControls();
     showToast(data.message || "Đã cập nhật auto phút");
   } catch (error) {
+    state.settings = before;
+    renderDailyAutoControls();
     showToast(readError(error));
+  } finally {
+    elements.saveAutoMinutesBtn.disabled = false;
   }
 }
 
@@ -789,23 +824,14 @@ async function callApi(action, payload = {}, forceToken = false) {
 }
 
 async function apiRequest(params) {
-  const preferred = localStorage.getItem("ttckApiTransport");
-  const transports =
-    preferred === "jsonp"
-      ? [
-          ["jsonp", jsonpRequest],
-          ["fetch", fetchRequest],
-        ]
-      : [
-          ["fetch", fetchRequest],
-          ["jsonp", jsonpRequest],
-        ];
-
+  const transports = [
+    ["jsonp", jsonpRequest],
+    ["fetch", fetchRequest],
+  ];
   let lastError = null;
   for (const [name, request] of transports) {
     try {
-      const result = await request(params);
-      localStorage.setItem("ttckApiTransport", name);
+      const result = await request(params, apiTimeoutMs(params.action, name));
       return result;
     } catch (error) {
       lastError = error;
@@ -815,11 +841,18 @@ async function apiRequest(params) {
   throw new Error(readError(lastError) || "Không gọi được Apps Script Web App.");
 }
 
-async function fetchRequest(params) {
+function apiTimeoutMs(action, transport) {
+  if (action === "syncGmail") return 120000;
+  if (transport === "fetch") return 8000;
+  if (action === "searchTransactions") return 30000;
+  return 30000;
+}
+
+async function fetchRequest(params, timeoutMs = 8000) {
   const callback = `__ttck_fetch_${Date.now()}_${Math.random().toString(36).slice(2)}`;
   const url = buildApiUrl(params, callback);
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 45000);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(url.toString(), {
       method: "GET",
@@ -836,13 +869,13 @@ async function fetchRequest(params) {
   }
 }
 
-function jsonpRequest(params) {
+function jsonpRequest(params, timeoutMs = 30000) {
   return new Promise((resolve, reject) => {
     const callback = `__ttck_cb_${Date.now()}_${Math.random().toString(36).slice(2)}`;
     const url = buildApiUrl(params, callback);
 
     const script = document.createElement("script");
-    const timer = setTimeout(() => cleanup(() => reject(new Error("Apps Script phản hồi quá lâu."))), 45000);
+    const timer = setTimeout(() => cleanup(() => reject(new Error("Apps Script phản hồi quá lâu."))), timeoutMs);
 
     window[callback] = (data) => cleanup(() => resolve(data));
     script.onerror = () => cleanup(() => reject(new Error("Không gọi được Apps Script Web App.")));
