@@ -331,15 +331,20 @@ async function searchTransactions() {
     time: elements.timeInput.value,
   };
   try {
-    const data = (await searchRealtimeTransactions(payload)) || (await callApi("searchTransactions", payload));
+    let data = await searchRealtimeTransactions(payload);
+    if (!data) {
+      data = await callApi("searchTransactions", payload);
+      data.source = "sheet";
+    }
     if (token !== state.searchToken) return;
-    if (data.firebaseRows) mirrorRowsToRealtime(data.firebaseRows).catch(console.warn);
+    if (data.firebaseRows) mirrorRowsToRealtime(data.firebaseRows).catch((error) => showToast(`Không lưu được Realtime: ${readError(error)}`));
     const rows = data.rows || [];
     state.filteredRows = isAdmin()
       ? rows
       : rows.filter((row) => Number(row.amount || 0) <= STAFF_AMOUNT_LIMIT);
     renderFiltered();
-    setReady(data.message || (state.filteredRows.length ? "Đã lọc xong" : "Không tìm thấy dữ liệu phù hợp"));
+    const sourceText = data.source === "realtime" ? "Realtime" : "Sheet";
+    setReady(data.message || (state.filteredRows.length ? `Đã lọc từ ${sourceText}` : `Không tìm thấy dữ liệu phù hợp trong ${sourceText}`));
   } catch (error) {
     if (token !== state.searchToken) return;
     showToast(readError(error));
@@ -478,6 +483,7 @@ async function searchRealtimeTransactions(payload) {
     rows: rows.slice(0, 500),
     total: rows.length,
     totalAmount: rows.slice(0, 500).reduce((sum, row) => sum + Number(row.amount || 0), 0),
+    source: "realtime",
     message: rows.length > 500 ? "Đang hiển thị 500 dòng mới nhất từ Realtime." : "",
   };
 }
@@ -616,9 +622,15 @@ async function syncGmail(days) {
   setBusy(`Đang cập nhật Gmail ${label}...`);
   try {
     const data = await callApi("syncGmail", { days });
-    if (data.firebaseRows) await mirrorRowsToRealtime(data.firebaseRows);
-    setReady(`Thêm mới ${data.added || 0}, trùng ${data.duplicated || 0}`);
-    showToast(`Đã cập nhật: thêm ${data.added || 0}, trùng ${data.duplicated || 0}`);
+    let realtimeText = "";
+    if (data.firebaseRows && data.firebaseRows.length) {
+      const mirrored = await mirrorRowsToRealtime(data.firebaseRows);
+      realtimeText = `, Realtime ${mirrored.count} dòng`;
+    } else {
+      realtimeText = ", không có dòng để đẩy Realtime";
+    }
+    setReady(`Thêm mới ${data.added || 0}, trùng ${data.duplicated || 0}${realtimeText}`);
+    showToast(`Đã cập nhật: thêm ${data.added || 0}, trùng ${data.duplicated || 0}${realtimeText}`);
     if (hasFilters()) await searchTransactions();
     state.statsLoaded = false;
   } catch (error) {
@@ -628,7 +640,7 @@ async function syncGmail(days) {
 }
 
 async function mirrorRowsToRealtime(rows) {
-  if (!auth.currentUser || !Array.isArray(rows) || !rows.length) return;
+  if (!auth.currentUser || !Array.isArray(rows) || !rows.length) return { count: 0 };
   const updates = {};
   rows.forEach((row) => {
     if (!row || !row.id) return;
@@ -639,7 +651,9 @@ async function mirrorRowsToRealtime(rows) {
     const action = toRealtimeAction(row);
     if (action && isAdmin()) updates[`actions/${row.id}`] = action;
   });
-  if (Object.keys(updates).length) await dbUpdate(dbRef(db), updates);
+  const count = Object.keys(updates).length;
+  if (count) await dbUpdate(dbRef(db), updates);
+  return { count };
 }
 
 async function mirrorActionToRealtime(row) {
