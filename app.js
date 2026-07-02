@@ -288,7 +288,10 @@ async function runSearchIfReady() {
 
   const amount = parseAmount(elements.amountInput.value);
   if (!isAdmin() && amount !== null && amount > STAFF_AMOUNT_LIMIT) {
-    showToast("Nhân viên không có quyền lọc đơn có số tiền trên 2.000.000");
+    state.filteredRows = [];
+    renderFiltered();
+    setReady("Nhân viên không được lọc hoặc xem đơn trên 2.000.000");
+    showToast("Nhân viên không có quyền lọc hoặc xem đơn có số tiền trên 2.000.000");
     return;
   }
 
@@ -306,7 +309,10 @@ async function searchTransactions() {
       date: elements.dateInput.value,
       time: elements.timeInput.value,
     });
-    state.filteredRows = data.rows || [];
+    const rows = data.rows || [];
+    state.filteredRows = isAdmin()
+      ? rows
+      : rows.filter((row) => Number(row.amount || 0) <= STAFF_AMOUNT_LIMIT);
     renderFiltered();
     setReady(data.message || "Đã lọc xong");
   } catch (error) {

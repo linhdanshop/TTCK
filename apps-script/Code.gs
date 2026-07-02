@@ -193,6 +193,7 @@ function createSession_(user) {
 function ensureAll_() {
   ensureSheets_();
   ensureEmployees_();
+  ensureDefaultSettings_();
 }
 
 function ensureSheets_() {
@@ -348,6 +349,7 @@ function searchTransactions_(user, payload) {
 
   const canWrite = isUserAllowedToWrite_(user);
   const rows = readDataRows_()
+    .filter(row => canSeeAmount_(user, row))
     .filter(row => amount === null || Number(row.amount) === amount)
     .filter(row => !dateKey || row.dateKey === dateKey)
     .filter(row => !time || String(row.time || '').indexOf(time) === 0)
@@ -373,6 +375,7 @@ function setChecked_(user, payload) {
   const actor = requireWriteActor_(user);
   const sh = getSheet_(CONFIG.SHEETS.DATA);
   const before = readDataRowAt_(row);
+  assertCanSeeAmount_(user, before);
   const actionAt = new Date();
 
   if (checked) {
@@ -393,6 +396,7 @@ function saveNote_(user, payload) {
   const note = String(payload.note || '').trim().slice(0, 500);
   const sh = getSheet_(CONFIG.SHEETS.DATA);
   const before = readDataRowAt_(row);
+  assertCanSeeAmount_(user, before);
   const actionAt = note || before.checked ? new Date() : '';
   const actorName = note || before.checked ? actor.name : '';
   const actorEmail = note || before.checked ? actor.email : '';
@@ -406,6 +410,7 @@ function saveNote_(user, payload) {
 function getStats_(user, payload) {
   const range = getStatsRange_(payload);
   const rows = readDataRows_()
+    .filter(row => canSeeAmount_(user, row))
     .filter(row => row.checked || row.note)
     .filter(row => row.actionAt && row.actionAt >= range.from && row.actionAt <= range.to)
     .sort((a, b) => Number(b.actionAt || 0) - Number(a.actionAt || 0));
@@ -494,7 +499,14 @@ function syncGmailByDays_(days, actorEmail) {
   ensureAll_();
   const start = startDateForDays_(days);
   const queryDays = Math.max(days + 1, 2);
-  const query = 'from:' + CONFIG.ACB_FROM + ' newer_than:' + queryDays + 'd';
+  const settings = readSettings_();
+  const sourceEmail = String(settings.sourceEmail || CONFIG.ACB_FROM).trim();
+  const extraQuery = String(settings.gmailExtraQuery || '').trim();
+  const query = [
+    sourceEmail ? 'from:' + sourceEmail : '',
+    'newer_than:' + queryDays + 'd',
+    extraQuery
+  ].filter(Boolean).join(' ');
   const existing = {};
   readDataRows_().forEach(row => existing[row.id] = true);
 
@@ -600,6 +612,16 @@ function requireWriteActor_(user) {
 
 function requireAdmin_(user) {
   if (!user || user.role !== 'admin') throw new Error('Chỉ admin được thao tác mục này.');
+}
+
+function canSeeAmount_(user, row) {
+  return user && (user.role === 'admin' || Number(row.amount || 0) <= CONFIG.STAFF_AMOUNT_LIMIT);
+}
+
+function assertCanSeeAmount_(user, row) {
+  if (!canSeeAmount_(user, row)) {
+    throw new Error('Nhân viên không có quyền xem hoặc thao tác đơn trên 2.000.000.');
+  }
 }
 
 function readDataRows_() {
@@ -840,6 +862,32 @@ function updateSetting_(key, value, actorEmail) {
   else sh.appendRow(data);
 }
 
+function ensureDefaultSettings_() {
+  const sh = getSheet_(CONFIG.SHEETS.SETTINGS);
+  const last = sh.getLastRow();
+  const existing = {};
+  if (last > 1) {
+    sh.getRange(2, 1, last - 1, 1)
+      .getValues()
+      .forEach(row => existing[String(row[0] || '')] = true);
+  }
+
+  const now = new Date();
+  const rows = [
+    ['sourceEmail', CONFIG.ACB_FROM],
+    ['gmailExtraQuery', ''],
+    ['dailyAutoEnabled', '0'],
+    ['dailyAutoTime', '08:00'],
+    ['autoSyncMinutes', '0']
+  ]
+    .filter(row => !existing[row[0]])
+    .map(row => [row[0], row[1], now, 'system']);
+
+  if (rows.length) {
+    sh.getRange(sh.getLastRow() + 1, 1, rows.length, SETTINGS_HEADERS.length).setValues(rows);
+  }
+}
+
 function readSettings_() {
   const sh = getSheet_(CONFIG.SHEETS.SETTINGS);
   const values = sh.getLastRow() <= 1
@@ -850,7 +898,9 @@ function readSettings_() {
   return {
     autoSyncMinutes: Number(map.autoSyncMinutes || 0),
     dailyAutoEnabled: map.dailyAutoEnabled === '1',
-    dailyAutoTime: normalizeTime_(map.dailyAutoTime || '08:00')
+    dailyAutoTime: normalizeTime_(map.dailyAutoTime || '08:00'),
+    sourceEmail: String(map.sourceEmail || CONFIG.ACB_FROM).trim() || CONFIG.ACB_FROM,
+    gmailExtraQuery: String(map.gmailExtraQuery || '').trim()
   };
 }
 
