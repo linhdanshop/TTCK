@@ -326,7 +326,7 @@ async function searchTransactions() {
       ? rows
       : rows.filter((row) => Number(row.amount || 0) <= STAFF_AMOUNT_LIMIT);
     renderFiltered();
-    setReady(data.message || "Đã lọc xong");
+    setReady(data.message || (state.filteredRows.length ? "Đã lọc xong" : "Không tìm thấy dữ liệu phù hợp"));
   } catch (error) {
     if (token !== state.searchToken) return;
     showToast(readError(error));
@@ -826,7 +826,10 @@ async function callApi(action, payload = {}, forceToken = false) {
 }
 
 async function apiRequest(params) {
-  const transports = apiTransports(params.action);
+  const transports = [
+    ["fetch", fetchRequest],
+    ["jsonp", jsonpRequest],
+  ];
   const errors = [];
   for (const [name, request] of transports) {
     try {
@@ -840,24 +843,14 @@ async function apiRequest(params) {
   throw new Error(readError(errors[0]) || "Không gọi được Apps Script Web App.");
 }
 
-function apiTransports(action) {
-  const writeActions = ["setChecked", "saveNote", "saveEmployees", "deleteHistoryMonth", "syncGmail", "setAutoSync", "setDailyAuto", "selectEmployee"];
-  if (writeActions.includes(action)) return [["jsonp", jsonpRequest]];
-  return [
-    ["jsonp", jsonpRequest],
-    ["fetch", fetchRequest],
-  ];
-}
-
 function apiTimeoutMs(action, transport) {
-  if (action === "syncGmail") return 120000;
-  if (action === "setChecked" || action === "saveNote") return 60000;
-  if (transport === "fetch") return 8000;
-  if (action === "searchTransactions") return 30000;
-  return 30000;
+  if (action === "syncGmail") return 180000;
+  if (action === "searchTransactions") return 120000;
+  if (action === "setChecked" || action === "saveNote") return 90000;
+  return 90000;
 }
 
-async function fetchRequest(params, timeoutMs = 8000) {
+async function fetchRequest(params, timeoutMs = 90000) {
   const callback = `__ttck_fetch_${Date.now()}_${Math.random().toString(36).slice(2)}`;
   const url = buildApiUrl(params, callback);
   const controller = new AbortController();
@@ -878,7 +871,7 @@ async function fetchRequest(params, timeoutMs = 8000) {
   }
 }
 
-function jsonpRequest(params, timeoutMs = 30000) {
+function jsonpRequest(params, timeoutMs = 90000) {
   return new Promise((resolve, reject) => {
     const callback = `__ttck_cb_${Date.now()}_${Math.random().toString(36).slice(2)}`;
     const url = buildApiUrl(params, callback);
@@ -1007,7 +1000,7 @@ function readError(error) {
 
 function isSlowApiError(error) {
   const raw = String(error && (error.message || error.code || error) || "");
-  return /abort|aborted|timeout|quá lâu|phản hồi chậm|signal is aborted/i.test(raw);
+  return /abort|aborted|timeout|quá lâu|phản hồi chậm|signal is aborted|failed to fetch|load failed|networkerror|không gọi được apps script/i.test(raw);
 }
 
 function highlightContent(value, query) {
