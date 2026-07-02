@@ -30,8 +30,11 @@ body {
     var(--bg);
   background-size: 56px 28px;
   color: var(--text);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: "Segoe UI Variable Text", "Segoe UI", Tahoma, Arial, sans-serif;
+  line-height: 1.4;
   letter-spacing: 0;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
 }
 
 button,
@@ -90,7 +93,7 @@ p {
 
 .login-panel h1 {
   font-size: 28px;
-  line-height: 1.15;
+  line-height: 1.28;
 }
 
 .app-shell {
@@ -124,7 +127,7 @@ p {
 .title-group h1 {
   color: var(--accent);
   font-size: 22px;
-  font-weight: 900;
+  font-weight: 800;
   text-transform: uppercase;
   white-space: nowrap;
 }
@@ -223,7 +226,7 @@ p {
   align-items: center;
   padding: 0 10px;
   font-size: 16px;
-  font-weight: 900;
+  font-weight: 800;
 }
 
 .search-field span {
@@ -280,7 +283,7 @@ p {
   border-right: 1px solid var(--line-strong);
   background: #fff;
   color: var(--text);
-  font-weight: 900;
+  font-weight: 800;
   white-space: nowrap;
 }
 
@@ -344,7 +347,7 @@ p {
   background: #eef2f7;
   color: #111827;
   font-size: 15px;
-  font-weight: 900;
+  font-weight: 800;
   text-align: center;
 }
 
@@ -628,7 +631,7 @@ p {
   border: 1px solid var(--line);
   border-radius: var(--radius);
   padding: 0 14px;
-  font-weight: 900;
+  font-weight: 800;
 }
 
 .permission-grid {
@@ -646,7 +649,7 @@ p {
   border: 1px solid var(--line);
   border-right: 0;
   font-size: 18px;
-  font-weight: 900;
+  font-weight: 800;
 }
 
 .grid-head:nth-child(3) {

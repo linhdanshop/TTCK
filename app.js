@@ -121,7 +121,8 @@ onAuthStateChanged(auth, async (user) => {
     await loadStats();
   } catch (error) {
     console.error(error);
-    await signOut(auth);
+    localStorage.removeItem("ttckAppsScriptSession");
+    state.session = "";
     showLogin(readError(error));
   }
 });
@@ -637,7 +638,7 @@ async function callApi(action, payload = {}, forceToken = false) {
     params.idToken = await user.getIdToken(true);
   }
 
-  const result = await jsonpRequest(params);
+  const result = await apiRequest(params);
   if (!result || result.ok === false) {
     if (result && result.needToken && !forceToken) {
       return callApi(action, payload, true);
@@ -653,18 +654,43 @@ async function callApi(action, payload = {}, forceToken = false) {
   return result.data || {};
 }
 
+async function apiRequest(params) {
+  try {
+    return await fetchRequest(params);
+  } catch (error) {
+    console.warn("Fetch Apps Script failed, fallback to JSONP", error);
+    return jsonpRequest(params);
+  }
+}
+
+async function fetchRequest(params) {
+  const callback = `__ttck_fetch_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  const url = buildApiUrl(params, callback);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 45000);
+  try {
+    const response = await fetch(url.toString(), {
+      method: "GET",
+      mode: "cors",
+      credentials: "omit",
+      cache: "no-store",
+      signal: controller.signal,
+    });
+    const text = await response.text();
+    if (!response.ok) throw new Error(`Apps Script HTTP ${response.status}`);
+    return parseJsonpEnvelope(text, callback);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function jsonpRequest(params) {
   return new Promise((resolve, reject) => {
     const callback = `__ttck_cb_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-    const url = new URL(APPS_SCRIPT_URL);
-    url.searchParams.set("callback", callback);
-    url.searchParams.set("action", params.action);
-    url.searchParams.set("payload", JSON.stringify(params.payload || {}));
-    if (params.session) url.searchParams.set("session", params.session);
-    if (params.idToken) url.searchParams.set("idToken", params.idToken);
+    const url = buildApiUrl(params, callback);
 
     const script = document.createElement("script");
-    const timer = setTimeout(() => cleanup(() => reject(new Error("Apps Script phản hồi quá lâu."))), 30000);
+    const timer = setTimeout(() => cleanup(() => reject(new Error("Apps Script phản hồi quá lâu."))), 45000);
 
     window[callback] = (data) => cleanup(() => resolve(data));
     script.onerror = () => cleanup(() => reject(new Error("Không gọi được Apps Script Web App.")));
@@ -678,6 +704,25 @@ function jsonpRequest(params) {
       done();
     }
   });
+}
+
+function buildApiUrl(params, callback) {
+  const url = new URL(APPS_SCRIPT_URL);
+  url.searchParams.set("callback", callback);
+  url.searchParams.set("action", params.action);
+  url.searchParams.set("payload", JSON.stringify(params.payload || {}));
+  if (params.session) url.searchParams.set("session", params.session);
+  if (params.idToken) url.searchParams.set("idToken", params.idToken);
+  return url;
+}
+
+function parseJsonpEnvelope(text, callback) {
+  const source = String(text || "").trim();
+  const prefix = `${callback}(`;
+  if (!source.startsWith(prefix) || !source.endsWith(");")) {
+    throw new Error("Apps Script trả dữ liệu không hợp lệ.");
+  }
+  return JSON.parse(source.slice(prefix.length, -2));
 }
 
 function ensureApiUrl() {
