@@ -72,6 +72,7 @@ const elements = {
   statsLoadBtn: $("statsLoadBtn"),
   historyMonth: $("historyMonth"),
   historyBody: $("historyBody"),
+  historyDialog: $("historyDialog"),
   contentDialog: $("contentDialog"),
   contentFullText: $("contentFullText"),
   employeeDialog: $("employeeDialog"),
@@ -622,6 +623,7 @@ async function loadHistory() {
       .join("")
       : `<tr><td colspan="4">Chưa có lịch sử trong tháng này.</td></tr>`;
   } catch (error) {
+    elements.historyBody.innerHTML = `<tr><td colspan="4">${escapeHtml(readError(error))}</td></tr>`;
     showToast(readError(error));
   }
 }

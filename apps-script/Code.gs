@@ -45,8 +45,71 @@ const EMPLOYEE_HEADERS = ['ID', 'Tên nhân viên', 'Quyền', 'Trạng thái', 
 const PROFILE_HEADERS = ['UID', 'Email', 'Role', 'Mã nhân viên', 'Tên nhân viên', 'Cập nhật lúc'];
 const HISTORY_HEADERS = ['Thời gian', 'Tháng', 'Người làm', 'Email', 'Hành động', 'Nội dung', 'ID giao dịch', 'Trước', 'Sau'];
 const LOG_HEADERS = ['Thời gian', 'Loại', 'Thêm mới', 'Trùng', 'Bỏ qua', 'Ghi chú'];
-const SETTINGS_HEADERS = ['Khóa', 'Giá trị', 'Cập nhật lúc', 'Người cập nhật'];
+const SETTINGS_HEADERS = ['Khóa', 'Giá trị', 'Cập nhật lúc', 'Người cập nhật', 'Hướng dẫn'];
 const DEBUG_HEADERS = ['Thời gian', 'Gmail ID', 'Lý do', 'Mẫu nội dung'];
+
+const DEFAULT_SETTINGS = [
+  {
+    key: 'sourceEmail',
+    value: CONFIG.ACB_FROM,
+    note: 'Email gửi thông báo chuyển khoản. Đổi cột Giá trị nếu Gmail nhận từ nguồn khác.'
+  },
+  {
+    key: 'gmailExtraQuery',
+    value: '',
+    note: 'Điều kiện Gmail thêm, ví dụ subject:(ACB) hoặc label:TTCK. Để trống nếu không cần.'
+  },
+  {
+    key: 'creditText',
+    value: 'Ghi có',
+    note: 'Chữ nhận diện tiền vào. Nếu nguồn khác dùng chữ khác thì đổi tại đây. Nhiều cụm dùng dấu |.'
+  },
+  {
+    key: 'debitText',
+    value: 'Ghi nợ',
+    note: 'Chữ nhận diện tiền ra để bỏ qua. Nhiều cụm dùng dấu |.'
+  },
+  {
+    key: 'amountRegex',
+    value: '(?:\\bgiao dich moi nhat\\s*:?\\s*)?\\bghi co\\s*[^0-9+-]*\\+?\\s*([\\d,.]+)\\s*vnd',
+    note: 'Regex lấy số tiền trên nội dung đã bỏ dấu. Nhóm ngoặc thứ 1 phải là số tiền.'
+  },
+  {
+    key: 'contentStartText',
+    value: 'Nội dung giao dịch',
+    note: 'Cụm chữ đứng trước nội dung chuyển khoản.'
+  },
+  {
+    key: 'contentEndRegex',
+    value: 'Cảm ơn|Trân trọng|$',
+    note: 'Regex đánh dấu hết nội dung chuyển khoản. Giữ $ để lấy đến cuối email nếu không gặp cụm kết thúc.'
+  },
+  {
+    key: 'timeRegex',
+    value: '(\\d{6})-(\\d{2}:\\d{2}:\\d{2})',
+    note: 'Regex lấy ngày giờ trong nội dung CK. Nhóm 1 là DDMMYY, nhóm 2 là HH:mm:ss.'
+  },
+  {
+    key: 'dailyAutoEnabled',
+    value: '0',
+    note: '1 là bật auto mỗi ngày khi web admin đang mở, 0 là tắt.'
+  },
+  {
+    key: 'dailyAutoTime',
+    value: '08:00',
+    note: 'Giờ auto mỗi ngày theo định dạng HH:mm.'
+  },
+  {
+    key: 'autoSyncMinutes',
+    value: '0',
+    note: '0 là tắt auto Apps Script trigger, hoặc 1/5 phút nếu admin bật trong web.'
+  }
+];
+
+function setupTTCK() {
+  ensureAll_();
+  return 'Đã tạo/cập nhật sheet TTCK và tab CAI_DAT.';
+}
 
 function doGet(e) {
   const callback = String((e.parameter && e.parameter.callback) || '').trim();
@@ -500,13 +563,7 @@ function syncGmailByDays_(days, actorEmail) {
   const start = startDateForDays_(days);
   const queryDays = Math.max(days + 1, 2);
   const settings = readSettings_();
-  const sourceEmail = String(settings.sourceEmail || CONFIG.ACB_FROM).trim();
-  const extraQuery = String(settings.gmailExtraQuery || '').trim();
-  const query = [
-    sourceEmail ? 'from:' + sourceEmail : '',
-    'newer_than:' + queryDays + 'd',
-    extraQuery
-  ].filter(Boolean).join(' ');
+  const query = buildGmailSearchQuery_(settings, queryDays);
   const existing = {};
   readDataRows_().forEach(row => existing[row.id] = true);
 
@@ -521,7 +578,7 @@ function syncGmailByDays_(days, actorEmail) {
     if (!threads.length) break;
     threads.forEach(thread => {
       thread.getMessages().forEach(msg => {
-        const parsed = parseAcbEmail_(msg);
+        const parsed = parseAcbEmail_(msg, settings);
         if (!parsed.ok) {
           skipped++;
           if (!parsed.silent) debugRows.push([new Date(), msg.getId(), parsed.reason, parsed.snippet || '']);
@@ -562,6 +619,16 @@ function syncGmailByDays_(days, actorEmail) {
 
 function autoSyncToday() {
   syncGmailByDays_(1, 'auto');
+}
+
+function buildGmailSearchQuery_(settings, queryDays) {
+  const sourceEmail = String(settings.sourceEmail || CONFIG.ACB_FROM).trim();
+  const extraQuery = String(settings.gmailExtraQuery || '').trim();
+  const parts = [];
+  if (sourceEmail) parts.push(sourceEmail.indexOf(':') >= 0 ? sourceEmail : 'from:' + sourceEmail);
+  parts.push('newer_than:' + queryDays + 'd');
+  if (extraQuery) parts.push(extraQuery);
+  return parts.join(' ');
 }
 
 function setAutoSync_(minutes, actorEmail) {
@@ -694,7 +761,8 @@ function formatRowForWeb_(row, canWrite) {
   };
 }
 
-function parseAcbEmail_(msg) {
+function parseAcbEmail_(msg, settings) {
+  settings = settings || readSettings_();
   let raw = '';
   try { raw += '\n' + (msg.getPlainBody() || ''); } catch (err) {}
   try { raw += '\n' + htmlToText_(msg.getBody() || ''); } catch (err) {}
@@ -710,24 +778,26 @@ function parseAcbEmail_(msg) {
   if (!flat) return { ok: false, reason: 'Không lấy được nội dung email', snippet: '' };
 
   const folded = foldText_(flat).replace(/\*/g, ' ');
-  if (/\bgiao dich moi nhat\s*:?\s*ghi no\b/i.test(folded) || /\bghi no\s*-?\s*[\d,.]+\s*vnd\b/i.test(folded)) {
-    return { ok: false, silent: true, reason: 'Bỏ qua Ghi nợ', snippet: '' };
+  const debitTerms = splitSettingList_(settings.debitText).map(foldText_).filter(Boolean);
+  if (debitTerms.some(term => folded.indexOf(term) >= 0)) {
+    return { ok: false, silent: true, reason: 'Bỏ qua ' + settings.debitText, snippet: '' };
   }
 
-  const amountMatch = folded.match(/\bgiao dich moi nhat\s*:?\s*ghi co\s*[^0-9+-]*\+?\s*([\d,.]+)\s*vnd/i)
-    || folded.match(/\bghi co\s*[^0-9+-]*\+?\s*([\d,.]+)\s*vnd/i);
-  if (!amountMatch) return { ok: false, reason: 'Không tìm thấy Ghi có + số tiền', snippet: flat.slice(0, 500) };
+  const amountResult = matchAmount_(folded, settings);
+  if (amountResult.error) return { ok: false, reason: amountResult.error, snippet: flat.slice(0, 500) };
+  if (!amountResult.match) return { ok: false, reason: 'Không tìm thấy ' + settings.creditText + ' + số tiền', snippet: flat.slice(0, 500) };
 
-  const contentMatch = flat.match(/Nội dung giao dịch\s*:?\s*([\s\S]*?)(?:Cảm ơn|Trân trọng|$)/i);
-  const content = cleanContent_(contentMatch ? contentMatch[1] : '');
+  const contentResult = extractConfiguredContent_(flat, settings);
+  if (contentResult.error) return { ok: false, reason: contentResult.error, snippet: flat.slice(0, 500) };
+  const content = cleanContent_(contentResult.content || '');
   if (!content) return { ok: false, reason: 'Không tách được nội dung giao dịch', snippet: flat.slice(0, 500) };
 
-  const txInfo = parseTxInfo_(content, msg.getDate());
+  const txInfo = parseTxInfo_(content, msg.getDate(), settings);
   return {
     ok: true,
     data: {
-      type: 'Ghi có',
-      amount: parseMoneyText_(amountMatch[1]),
+      type: settings.creditText || 'Ghi có',
+      amount: parseMoneyText_(amountResult.match[1]),
       content,
       transactionCode: txInfo.transactionCode,
       dateKey: txInfo.dateKey,
@@ -738,12 +808,47 @@ function parseAcbEmail_(msg) {
   };
 }
 
-function parseTxInfo_(content, fallbackDate) {
+function matchAmount_(foldedText, settings) {
+  const regexText = String(settings.amountRegex || '').trim();
+  if (regexText) {
+    try {
+      return { match: String(foldedText || '').match(new RegExp(regexText, 'i')) };
+    } catch (err) {
+      return { error: 'amountRegex không hợp lệ: ' + err.message };
+    }
+  }
+
+  const terms = splitSettingList_(settings.creditText)
+    .map(foldText_)
+    .filter(Boolean)
+    .map(escapeRegex_);
+  const termPattern = terms.length ? terms.join('|') : 'ghi co';
+  const fallbackRegex = new RegExp('(?:giao dich moi nhat\\s*:?\\s*)?(?:' + termPattern + ')\\s*[^0-9+-]*\\+?\\s*([\\d,.]+)\\s*vnd', 'i');
+  return { match: String(foldedText || '').match(fallbackRegex) };
+}
+
+function extractConfiguredContent_(flatText, settings) {
+  const startText = String(settings.contentStartText || '').trim();
+  const endRegex = String(settings.contentEndRegex || '$').trim() || '$';
+  const startPattern = startText ? escapeRegex_(startText).replace(/\s+/g, '\\s*') + '\\s*:?\\s*' : '';
+  try {
+    const regex = new RegExp(startPattern + '([\\s\\S]*?)(?:' + endRegex + ')', 'i');
+    const match = String(flatText || '').match(regex);
+    return { content: match ? match[1] : '' };
+  } catch (err) {
+    return { error: 'contentEndRegex không hợp lệ: ' + err.message };
+  }
+}
+
+function parseTxInfo_(content, fallbackDate, settings) {
   let match = String(content || '').match(/\bACB-GD-([A-Z0-9]+)-(\d{6})-(\d{2}:\d{2}:\d{2})\b/i);
   if (match) return buildTxInfo_(match[1], match[2], match[3], fallbackDate);
 
   match = String(content || '').match(/\bGD\s+([A-Z0-9]+)\s+(\d{6})-(\d{2}:\d{2}:\d{2})\b/i);
   if (match) return buildTxInfo_(match[1], match[2], match[3], fallbackDate);
+
+  const configuredTime = parseConfiguredTxTime_(content, fallbackDate, settings);
+  if (configuredTime) return configuredTime;
 
   match = String(content || '').match(/\b(\d{6})-(\d{2}:\d{2}:\d{2})\b/i);
   if (match) return buildTxInfo_('', match[1], match[2], fallbackDate);
@@ -756,6 +861,16 @@ function parseTxInfo_(content, fallbackDate) {
     time: Utilities.formatDate(d, CONFIG.TZ, 'HH:mm:ss'),
     timestamp: d.getTime()
   };
+}
+
+function parseConfiguredTxTime_(content, fallbackDate, settings) {
+  const regexText = settings && String(settings.timeRegex || '').trim();
+  if (!regexText) return null;
+  try {
+    const match = String(content || '').match(new RegExp(regexText, 'i'));
+    if (match && match[1] && match[2]) return buildTxInfo_('', String(match[1]), String(match[2]), fallbackDate);
+  } catch (err) {}
+  return null;
 }
 
 function buildTxInfo_(transactionCode, ddmmyy, time, fallbackDate) {
@@ -857,7 +972,9 @@ function updateSetting_(key, value, actorEmail) {
       .findNext();
     row = found ? found.getRow() : 0;
   }
-  const data = [key, value, new Date(), actorEmail || ''];
+  const defaultSetting = DEFAULT_SETTINGS.find(item => item.key === key);
+  const currentNote = row && sh.getLastColumn() >= 5 ? String(sh.getRange(row, 5).getValue() || '') : '';
+  const data = [key, value, new Date(), actorEmail || '', currentNote || (defaultSetting && defaultSetting.note) || ''];
   if (row) sh.getRange(row, 1, 1, SETTINGS_HEADERS.length).setValues([data]);
   else sh.appendRow(data);
 }
@@ -867,21 +984,23 @@ function ensureDefaultSettings_() {
   const last = sh.getLastRow();
   const existing = {};
   if (last > 1) {
-    sh.getRange(2, 1, last - 1, 1)
+    const defaultMap = {};
+    DEFAULT_SETTINGS.forEach(item => defaultMap[item.key] = item);
+    sh.getRange(2, 1, last - 1, SETTINGS_HEADERS.length)
       .getValues()
-      .forEach(row => existing[String(row[0] || '')] = true);
+      .forEach((row, index) => {
+        const key = String(row[0] || '');
+        existing[key] = true;
+        if (defaultMap[key] && !String(row[4] || '').trim()) {
+          sh.getRange(index + 2, 5).setValue(defaultMap[key].note);
+        }
+      });
   }
 
   const now = new Date();
-  const rows = [
-    ['sourceEmail', CONFIG.ACB_FROM],
-    ['gmailExtraQuery', ''],
-    ['dailyAutoEnabled', '0'],
-    ['dailyAutoTime', '08:00'],
-    ['autoSyncMinutes', '0']
-  ]
-    .filter(row => !existing[row[0]])
-    .map(row => [row[0], row[1], now, 'system']);
+  const rows = DEFAULT_SETTINGS
+    .filter(item => !existing[item.key])
+    .map(item => [item.key, item.value, now, 'system', item.note]);
 
   if (rows.length) {
     sh.getRange(sh.getLastRow() + 1, 1, rows.length, SETTINGS_HEADERS.length).setValues(rows);
@@ -894,13 +1013,23 @@ function readSettings_() {
     ? []
     : sh.getRange(2, 1, sh.getLastRow() - 1, SETTINGS_HEADERS.length).getValues();
   const map = {};
-  values.forEach(row => map[String(row[0] || '')] = String(row[1] || ''));
+  DEFAULT_SETTINGS.forEach(item => map[item.key] = String(item.value || ''));
+  values.forEach(row => {
+    const key = String(row[0] || '');
+    if (key) map[key] = String(row[1] || '');
+  });
   return {
     autoSyncMinutes: Number(map.autoSyncMinutes || 0),
     dailyAutoEnabled: map.dailyAutoEnabled === '1',
     dailyAutoTime: normalizeTime_(map.dailyAutoTime || '08:00'),
     sourceEmail: String(map.sourceEmail || CONFIG.ACB_FROM).trim() || CONFIG.ACB_FROM,
-    gmailExtraQuery: String(map.gmailExtraQuery || '').trim()
+    gmailExtraQuery: String(map.gmailExtraQuery || '').trim(),
+    creditText: String(map.creditText || 'Ghi có').trim() || 'Ghi có',
+    debitText: String(map.debitText || 'Ghi nợ').trim() || 'Ghi nợ',
+    amountRegex: String(map.amountRegex || '').trim(),
+    contentStartText: String(map.contentStartText || 'Nội dung giao dịch').trim(),
+    contentEndRegex: String(map.contentEndRegex || '$').trim() || '$',
+    timeRegex: String(map.timeRegex || '').trim()
   };
 }
 
@@ -925,6 +1054,17 @@ function matchContent_(content, query, mode) {
   if (!needle) return true;
   if (mode === 'exact') return source.indexOf(needle) >= 0;
   return needle.split(/\s+/).filter(Boolean).every(token => source.indexOf(token) >= 0);
+}
+
+function splitSettingList_(value) {
+  return String(value || '')
+    .split('|')
+    .map(item => item.trim())
+    .filter(Boolean);
+}
+
+function escapeRegex_(value) {
+  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function getStatsRange_(payload) {
