@@ -769,7 +769,7 @@ async function callApi(action, payload = {}, forceToken = false) {
   if (forceToken || !state.session) {
     const user = auth.currentUser;
     if (!user) throw new Error("Cần đăng nhập Gmail.");
-    params.idToken = await user.getIdToken(forceToken && Boolean(state.session));
+    params.idToken = await user.getIdToken(forceToken);
   }
 
   const result = await apiRequest(params);
@@ -789,7 +789,30 @@ async function callApi(action, payload = {}, forceToken = false) {
 }
 
 async function apiRequest(params) {
-  return jsonpRequest(params);
+  const preferred = localStorage.getItem("ttckApiTransport");
+  const transports =
+    preferred === "jsonp"
+      ? [
+          ["jsonp", jsonpRequest],
+          ["fetch", fetchRequest],
+        ]
+      : [
+          ["fetch", fetchRequest],
+          ["jsonp", jsonpRequest],
+        ];
+
+  let lastError = null;
+  for (const [name, request] of transports) {
+    try {
+      const result = await request(params);
+      localStorage.setItem("ttckApiTransport", name);
+      return result;
+    } catch (error) {
+      lastError = error;
+      console.warn(`${name} Apps Script failed`, error);
+    }
+  }
+  throw new Error(readError(lastError) || "Không gọi được Apps Script Web App.");
 }
 
 async function fetchRequest(params) {
