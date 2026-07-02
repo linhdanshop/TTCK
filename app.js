@@ -241,6 +241,9 @@ elements.deleteHistoryBtn.addEventListener("click", deleteHistoryMonth);
 elements.autoSyncBtn.addEventListener("click", openAutoSyncDialog);
 elements.saveAutoMinutesBtn.addEventListener("click", saveAutoMinutes);
 elements.saveDailyAutoBtn.addEventListener("click", saveDailyAuto);
+elements.dailyAutoEnabled.addEventListener("change", updateDailyAutoStatusFromInputs);
+elements.dailyAutoTime.addEventListener("input", updateDailyAutoStatusFromInputs);
+elements.dailyAutoTime.addEventListener("change", updateDailyAutoStatusFromInputs);
 
 function showLogin(message = "") {
   elements.mainScreen.classList.add("hidden");
@@ -462,13 +465,24 @@ async function searchRealtimeTransactions(payload) {
   const basePath = isAdmin() ? "transactionsAdmin" : "transactionsStaff";
   const baseRef = dbRef(db, basePath);
   const dateKey = payload.date ? dateKeyFromInputValue(payload.date) : "";
-  const snap = dateKey
-    ? await get(dbQuery(baseRef, orderByChild("dateKey"), equalTo(dateKey)))
-    : await get(baseRef);
+  let snap;
+  try {
+    snap = dateKey
+      ? await get(dbQuery(baseRef, orderByChild("dateKey"), equalTo(dateKey)))
+      : await get(baseRef);
+  } catch (error) {
+    console.warn("Realtime search denied, falling back to Apps Script", error);
+    return null;
+  }
   if (!snap.exists()) return null;
 
-  const actionsSnap = await get(dbRef(db, "actions"));
-  const actions = actionsSnap.exists() ? actionsSnap.val() || {} : {};
+  let actions = {};
+  try {
+    const actionsSnap = await get(dbRef(db, "actions"));
+    actions = actionsSnap.exists() ? actionsSnap.val() || {} : {};
+  } catch (error) {
+    console.warn("Realtime actions read denied, using transaction state only", error);
+  }
   const amount = payload.amount === "" || payload.amount === null || payload.amount === undefined ? null : Number(payload.amount);
   const rows = [];
   snap.forEach((child) => {
@@ -867,8 +881,13 @@ function renderDailyAutoControls() {
     : "Đang tắt auto cập nhật theo phút.";
   elements.dailyAutoEnabled.checked = !!settings.dailyAutoEnabled;
   elements.dailyAutoTime.value = settings.dailyAutoTime || "08:00";
-  elements.dailyAutoStatus.textContent = settings.dailyAutoEnabled
-    ? `Đang bật: mỗi ngày lúc ${elements.dailyAutoTime.value} nếu web admin đang mở.`
+  updateDailyAutoStatusFromInputs();
+}
+
+function updateDailyAutoStatusFromInputs(prefix = "Đang bật") {
+  const time = elements.dailyAutoTime.value || "08:00";
+  elements.dailyAutoStatus.textContent = elements.dailyAutoEnabled.checked
+    ? `${prefix}: mỗi ngày lúc ${time} nếu web admin đang mở.`
     : "Đang tắt auto ngày.";
 }
 
@@ -913,17 +932,36 @@ async function saveAutoMinutes() {
 
 async function saveDailyAuto() {
   if (!isAdmin()) return;
+  const enabled = elements.dailyAutoEnabled.checked;
+  const time = elements.dailyAutoTime.value || "08:00";
+  const before = { ...(state.settings || {}) };
+  state.settings = { ...before, dailyAutoEnabled: enabled, dailyAutoTime: time };
+  updateDailyAutoStatusFromInputs("Đang lưu");
+  elements.saveDailyAutoBtn.disabled = true;
   try {
     const data = await callApi("setDailyAuto", {
-      enabled: elements.dailyAutoEnabled.checked,
-      time: elements.dailyAutoTime.value || "08:00",
+      enabled,
+      time,
     });
-    state.settings = data.settings || state.settings || {};
+    state.settings = {
+      ...(state.settings || {}),
+      ...(data.settings || {}),
+      dailyAutoEnabled: data.settings && data.settings.dailyAutoEnabled !== undefined
+        ? data.settings.dailyAutoEnabled
+        : enabled,
+      dailyAutoTime: data.settings && data.settings.dailyAutoTime
+        ? data.settings.dailyAutoTime
+        : time,
+    };
     renderDailyAutoControls();
     startDailyAutoWatcher();
     showToast(data.message || "Đã lưu auto ngày");
   } catch (error) {
+    state.settings = before;
+    renderDailyAutoControls();
     showToast(readError(error));
+  } finally {
+    elements.saveDailyAutoBtn.disabled = false;
   }
 }
 

@@ -16,8 +16,8 @@
       }
     },
     "actions": {
+      ".read": "auth != null && (auth.token.email == 'kythuatlado@gmail.com' || auth.token.email == 'tranvanan180393@gmail.com' || auth.token.email == 'shoplinhdan2026@gmail.com')",
       "$id": {
-        ".read": "auth != null && (auth.token.email == 'kythuatlado@gmail.com' || auth.token.email == 'tranvanan180393@gmail.com' || auth.token.email == 'shoplinhdan2026@gmail.com')",
         ".write": "auth != null && ((auth.token.email == 'kythuatlado@gmail.com' || auth.token.email == 'tranvanan180393@gmail.com' || auth.token.email == 'nguyenthingocnhung0703@gmail.com') || root.child('transactionsStaff').child($id).exists())",
         ".validate": "newData.val() == null || (newData.child('checked').isBoolean() && newData.child('note').isString() && newData.child('actorName').isString() && newData.child('updatedAt').isNumber())"
       },
