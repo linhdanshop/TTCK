@@ -651,16 +651,22 @@ function setAutoSync_(minutes, actorEmail) {
     throw new Error('Auto phút chỉ hỗ trợ 0, 1, 5, 10, 15 hoặc 30 phút.');
   }
 
-  ScriptApp.getProjectTriggers().forEach(trigger => {
-    if (trigger.getHandlerFunction() === 'autoSyncToday') ScriptApp.deleteTrigger(trigger);
-  });
-
   let message = 'Đã tắt auto cập nhật theo phút.';
-  if (minutes > 0) {
-    ScriptApp.newTrigger('autoSyncToday').timeBased().everyMinutes(minutes).create();
-    message = 'Đã bật auto cập nhật mỗi ' + minutes + ' phút.';
-  }
   updateSetting_('autoSyncMinutes', String(minutes), actorEmail);
+
+  try {
+    ScriptApp.getProjectTriggers().forEach(trigger => {
+      if (trigger.getHandlerFunction() === 'autoSyncToday') ScriptApp.deleteTrigger(trigger);
+    });
+
+    if (minutes > 0) {
+      ScriptApp.newTrigger('autoSyncToday').timeBased().everyMinutes(minutes).create();
+      message = 'Đã bật auto cập nhật mỗi ' + minutes + ' phút.';
+    }
+  } catch (err) {
+    message = 'Đã lưu CAI_DAT, nhưng Apps Script chưa tạo được trigger: ' + (err && err.message ? err.message : err);
+  }
+
   writeSimpleHistory_({ name: 'Admin', email: actorEmail || '' }, 'Cài auto phút', message);
   return { minutes, settings: readSettings_(), message };
 }
