@@ -20,7 +20,7 @@ const firebaseConfig = {
 
 // Dán URL Web App Apps Script sau khi deploy.
 // Ví dụ: https://script.google.com/macros/s/AKfycb.../exec
-const APPS_SCRIPT_URL = "PASTE_APPS_SCRIPT_WEB_APP_URL_HERE";
+const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwnN3taPldzxAB_zIGqAZx6j4Mw6pVr7R_kYjJS0wCkQ3hvrXUJpfi8vR69UX199zSr/exec";
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
