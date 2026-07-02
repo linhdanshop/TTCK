@@ -429,6 +429,14 @@ p {
   text-decoration: underline;
 }
 
+.content-cell mark {
+  padding: 0 2px;
+  background: #fff176;
+  color: #111827;
+  border-radius: 2px;
+  font-weight: 800;
+}
+
 .note-input {
   width: 100%;
   min-height: 34px;
@@ -641,6 +649,43 @@ p {
   font-weight: 800;
 }
 
+.auto-daily-box {
+  display: grid;
+  grid-template-columns: minmax(230px, 1fr) auto auto;
+  gap: 10px;
+  align-items: center;
+  padding: 0 16px 16px;
+}
+
+.auto-check,
+.auto-time {
+  min-height: 42px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+  font-weight: 800;
+}
+
+.auto-check input {
+  width: 18px;
+  height: 18px;
+}
+
+.auto-time input {
+  min-height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0 8px;
+  background: #fff;
+}
+
+.auto-status {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .permission-grid {
   padding: 10px 16px 0;
   display: grid;
@@ -770,6 +815,10 @@ p {
   }
 
   .add-employee-row {
+    grid-template-columns: 1fr;
+  }
+
+  .auto-daily-box {
     grid-template-columns: 1fr;
   }
 

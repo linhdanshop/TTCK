@@ -81,7 +81,8 @@ function route_(action, payload, idToken, session) {
     case 'bootstrap':
       data = {
         profile: ensureProfile_(user),
-        employees: readEmployees_()
+        employees: readEmployees_(),
+        settings: readSettings_()
       };
       break;
 
@@ -107,7 +108,7 @@ function route_(action, payload, idToken, session) {
 
     case 'saveEmployees':
       requireAdmin_(user);
-      data = saveEmployees_(payload.employees);
+      data = saveEmployees_(payload.employees, user.email);
       break;
 
     case 'getHistory':
@@ -128,6 +129,11 @@ function route_(action, payload, idToken, session) {
     case 'setAutoSync':
       requireAdmin_(user);
       data = setAutoSync_(Number(payload.minutes || 0), user.email);
+      break;
+
+    case 'setDailyAuto':
+      requireAdmin_(user);
+      data = setDailyAuto_(payload, user.email);
       break;
 
     default:
@@ -422,7 +428,7 @@ function getStats_(user, payload) {
   };
 }
 
-function saveEmployees_(employees) {
+function saveEmployees_(employees, actorEmail) {
   const cleaned = [];
   const used = {};
   (employees || []).forEach(item => {
@@ -450,6 +456,7 @@ function saveEmployees_(employees) {
   sh.getRange(2, 1, cleaned.length, EMPLOYEE_HEADERS.length).setValues(
     cleaned.map(emp => [emp.id, emp.name, emp.permission, 'active', now])
   );
+  writeSimpleHistory_({ name: 'Admin', email: actorEmail || '' }, 'Set quyền nhân viên', 'Cập nhật ' + cleaned.length + ' nhân viên');
   return { employees: cleaned };
 }
 
@@ -533,6 +540,11 @@ function syncGmailByDays_(days, actorEmail) {
   }
   if (debugRows.length) appendRows_(getSheet_(CONFIG.SHEETS.DEBUG), debugRows);
   writeSyncLog_(days === 1 ? 'Hôm nay' : days + ' ngày', added, duplicated, skipped, actorEmail || '');
+  writeSimpleHistory_(
+    { name: actorEmail === 'auto' ? 'Auto' : 'Admin', email: actorEmail || '' },
+    'Cập nhật Gmail',
+    (days === 1 ? 'Hôm nay' : days + ' ngày') + ': thêm ' + added + ', trùng ' + duplicated + ', bỏ qua ' + skipped
+  );
   return { added, duplicated, skipped };
 }
 
@@ -551,7 +563,20 @@ function setAutoSync_(minutes, actorEmail) {
     message = 'Đã bật auto cập nhật mỗi ' + minutes + ' phút.';
   }
   updateSetting_('autoSyncMinutes', String(minutes === 1 || minutes === 5 ? minutes : 0), actorEmail);
+  writeSimpleHistory_({ name: 'Admin', email: actorEmail || '' }, 'Cài auto phút', message);
   return { minutes: minutes === 1 || minutes === 5 ? minutes : 0, message };
+}
+
+function setDailyAuto_(payload, actorEmail) {
+  const enabled = payload && payload.enabled === true;
+  const time = normalizeTime_(payload && payload.time || '08:00');
+  updateSetting_('dailyAutoEnabled', enabled ? '1' : '0', actorEmail);
+  updateSetting_('dailyAutoTime', time, actorEmail);
+  const message = enabled
+    ? 'Đã bật auto mỗi ngày lúc ' + time + ' khi web admin đang mở.'
+    : 'Đã tắt auto mỗi ngày khi web admin đang mở.';
+  writeSimpleHistory_({ name: 'Admin', email: actorEmail || '' }, 'Cài auto ngày', message);
+  return { settings: readSettings_(), message };
 }
 
 function isUserAllowedToWrite_(user) {
@@ -771,6 +796,21 @@ function writeHistory_(actor, tx, actionText, detail, before, after) {
   ]);
 }
 
+function writeSimpleHistory_(actor, actionText, detail) {
+  const createdAt = new Date();
+  getSheet_(CONFIG.SHEETS.HISTORY).appendRow([
+    createdAt,
+    monthKeyFromDate_(createdAt),
+    actor.name || '',
+    actor.email || '',
+    actionText,
+    detail || '',
+    '',
+    '',
+    ''
+  ]);
+}
+
 function historySnapshot_(row) {
   return {
     checked: !!(row && row.checked),
@@ -798,6 +838,20 @@ function updateSetting_(key, value, actorEmail) {
   const data = [key, value, new Date(), actorEmail || ''];
   if (row) sh.getRange(row, 1, 1, SETTINGS_HEADERS.length).setValues([data]);
   else sh.appendRow(data);
+}
+
+function readSettings_() {
+  const sh = getSheet_(CONFIG.SHEETS.SETTINGS);
+  const values = sh.getLastRow() <= 1
+    ? []
+    : sh.getRange(2, 1, sh.getLastRow() - 1, SETTINGS_HEADERS.length).getValues();
+  const map = {};
+  values.forEach(row => map[String(row[0] || '')] = String(row[1] || ''));
+  return {
+    autoSyncMinutes: Number(map.autoSyncMinutes || 0),
+    dailyAutoEnabled: map.dailyAutoEnabled === '1',
+    dailyAutoTime: normalizeTime_(map.dailyAutoTime || '08:00')
+  };
 }
 
 function appendRows_(sheet, rows) {
@@ -864,6 +918,14 @@ function parseInputDate_(value) {
   const parts = String(value || '').split('-').map(Number);
   if (parts.length !== 3) return new Date();
   return new Date(parts[0], parts[1] - 1, parts[2]);
+}
+
+function normalizeTime_(value) {
+  const match = String(value || '').match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) return '08:00';
+  const hh = Math.max(0, Math.min(23, Number(match[1])));
+  const mm = Math.max(0, Math.min(59, Number(match[2])));
+  return String(hh).padStart(2, '0') + ':' + String(mm).padStart(2, '0');
 }
 
 function dateKeyFromDate_(date) {

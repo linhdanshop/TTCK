@@ -41,7 +41,10 @@ const state = {
   statsSummary: null,
   statsFilter: null,
   statsLoaded: false,
+  settings: {},
   permissionDraft: [],
+  dailyAutoTimer: null,
+  dailyAutoRunning: false,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -88,6 +91,10 @@ const elements = {
   sync10DaysBtn: $("sync10DaysBtn"),
   autoSyncBtn: $("autoSyncBtn"),
   autoSyncDialog: $("autoSyncDialog"),
+  dailyAutoEnabled: $("dailyAutoEnabled"),
+  dailyAutoTime: $("dailyAutoTime"),
+  saveDailyAutoBtn: $("saveDailyAutoBtn"),
+  dailyAutoStatus: $("dailyAutoStatus"),
   toast: $("toast"),
 };
 
@@ -95,6 +102,9 @@ await setPersistence(auth, browserLocalPersistence);
 
 onAuthStateChanged(auth, async (user) => {
   if (!user) {
+    clearInterval(state.dailyAutoTimer);
+    state.dailyAutoTimer = null;
+    state.profile = null;
     showLogin();
     return;
   }
@@ -113,10 +123,12 @@ onAuthStateChanged(auth, async (user) => {
     state.session = data.session || state.session;
     state.profile = data.profile;
     state.employees = data.employees || [];
+    state.settings = data.settings || {};
     setupDefaultDates();
     renderShell();
     showMain();
-    if (state.profile && state.profile.role === "staff" && !state.profile.employeeId) {
+    startDailyAutoWatcher();
+    if (state.profile && state.profile.role === "staff") {
       window.setTimeout(openEmployeeDialog, 0);
     }
   } catch (error) {
@@ -142,9 +154,13 @@ elements.loginBtn.addEventListener("click", async () => {
 });
 
 elements.logoutBtn.addEventListener("click", async () => {
+  resetFilters();
+  clearInterval(state.dailyAutoTimer);
+  state.dailyAutoTimer = null;
   localStorage.removeItem("ttckLoginAt");
   localStorage.removeItem("ttckAppsScriptSession");
   state.session = "";
+  state.profile = null;
   await signOut(auth);
 });
 
@@ -207,6 +223,7 @@ elements.historyBtn.addEventListener("click", openHistoryDialog);
 elements.loadHistoryBtn.addEventListener("click", loadHistory);
 elements.deleteHistoryBtn.addEventListener("click", deleteHistoryMonth);
 elements.autoSyncBtn.addEventListener("click", openAutoSyncDialog);
+elements.saveDailyAutoBtn.addEventListener("click", saveDailyAuto);
 
 function showLogin(message = "") {
   elements.mainScreen.classList.add("hidden");
@@ -240,6 +257,7 @@ function renderShell() {
   });
 
   renderEmployeeChoices();
+  renderDailyAutoControls();
   refreshIcons();
 }
 
@@ -270,7 +288,7 @@ async function runSearchIfReady() {
 
   const amount = parseAmount(elements.amountInput.value);
   if (!isAdmin() && amount !== null && amount > STAFF_AMOUNT_LIMIT) {
-    showToast("Nhân viên chỉ được lọc số tiền từ 0 đến 2.000.000");
+    showToast("Nhân viên không có quyền lọc đơn có số tiền trên 2.000.000");
     return;
   }
 
@@ -305,6 +323,18 @@ function renderFiltered() {
   refreshIcons();
 }
 
+function resetFilters() {
+  elements.queryInput.value = "";
+  elements.amountInput.value = "";
+  elements.dateInput.value = "";
+  elements.timeInput.value = "";
+  state.filteredRows = [];
+  state.tab = "filtered";
+  switchTab("filtered");
+  renderFiltered();
+  setReady("Sẵn sàng");
+}
+
 function renderActionRows(tbody, rows) {
   tbody.innerHTML = rows
     .map((row) => {
@@ -315,7 +345,7 @@ function renderActionRows(tbody, rows) {
           <td>${escapeHtml(row.dateText || "")}</td>
           <td>${escapeHtml(row.time || "")}</td>
           <td>${formatMoney(row.amount)}</td>
-          <td><span class="content-cell" data-content="${escapeAttr(row.content || "")}">${escapeHtml(row.content || "")}</span></td>
+          <td><span class="content-cell" data-content="${escapeAttr(row.content || "")}">${highlightContent(row.content || "", elements.queryInput.value.trim())}</span></td>
           <td>${escapeHtml(row.type || "")}</td>
           <td>
             <input class="check-input" type="checkbox" ${row.checked ? "checked" : ""} ${canWrite || (isAdmin() && row.checked) ? "" : "disabled"} aria-label="${checkedText}">
@@ -483,6 +513,7 @@ function renderEmployeeChoices() {
       try {
         const data = await callApi("selectEmployee", { employeeId: button.dataset.id });
         state.profile = data.profile;
+        resetFilters();
         renderShell();
         elements.employeeDialog.close();
       } catch (error) {
@@ -605,6 +636,7 @@ async function deleteHistoryMonth() {
 
 function openAutoSyncDialog() {
   if (!isAdmin()) return;
+  renderDailyAutoControls();
   elements.autoSyncDialog.showModal();
   elements.autoSyncDialog.querySelectorAll("[data-auto]").forEach((button) => {
     button.onclick = async () => {
@@ -618,6 +650,68 @@ function openAutoSyncDialog() {
       }
     };
   });
+}
+
+function renderDailyAutoControls() {
+  const settings = state.settings || {};
+  elements.dailyAutoEnabled.checked = !!settings.dailyAutoEnabled;
+  elements.dailyAutoTime.value = settings.dailyAutoTime || "08:00";
+  elements.dailyAutoStatus.textContent = settings.dailyAutoEnabled
+    ? `Đang bật: mỗi ngày lúc ${elements.dailyAutoTime.value} nếu web admin đang mở.`
+    : "Đang tắt auto ngày.";
+}
+
+async function saveDailyAuto() {
+  if (!isAdmin()) return;
+  try {
+    const data = await callApi("setDailyAuto", {
+      enabled: elements.dailyAutoEnabled.checked,
+      time: elements.dailyAutoTime.value || "08:00",
+    });
+    state.settings = data.settings || state.settings || {};
+    renderDailyAutoControls();
+    startDailyAutoWatcher();
+    showToast(data.message || "Đã lưu auto ngày");
+  } catch (error) {
+    showToast(readError(error));
+  }
+}
+
+function startDailyAutoWatcher() {
+  clearInterval(state.dailyAutoTimer);
+  state.dailyAutoTimer = null;
+  if (!isAdmin()) return;
+  state.dailyAutoTimer = setInterval(checkDailyAuto, 30000);
+  checkDailyAuto();
+}
+
+async function checkDailyAuto() {
+  const settings = state.settings || {};
+  if (!isAdmin() || !settings.dailyAutoEnabled || state.dailyAutoRunning) return;
+
+  const runTime = settings.dailyAutoTime || "08:00";
+  const today = toInputDate(new Date());
+  const lastKey = `ttckDailyAutoLast:${runTime}`;
+  if (localStorage.getItem(lastKey) === today) return;
+
+  const now = new Date();
+  const currentTime = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+  if (currentTime < runTime) return;
+
+  state.dailyAutoRunning = true;
+  try {
+    setBusy(`Auto ngày ${runTime}: đang cập nhật hôm nay...`);
+    const data = await callApi("syncGmail", { days: 1 });
+    localStorage.setItem(lastKey, today);
+    state.statsLoaded = false;
+    setReady(`Auto ngày: thêm ${data.added || 0}, trùng ${data.duplicated || 0}`);
+    if (hasFilters()) await searchTransactions();
+  } catch (error) {
+    showToast(readError(error));
+    setReady("Lỗi auto ngày");
+  } finally {
+    state.dailyAutoRunning = false;
+  }
 }
 
 function bindContentClicks(root) {
@@ -817,6 +911,37 @@ function showToast(message) {
 function readError(error) {
   const raw = error && (error.message || error.code || String(error));
   return raw ? raw.replace(/^Firebase:\s*/i, "") : "Có lỗi xảy ra";
+}
+
+function highlightContent(value, query) {
+  const text = String(value || "");
+  const tokens = String(query || "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (!tokens.length) return escapeHtml(text);
+
+  const phrase = tokens.map(escapeRegExp).join("\\s+");
+  let pattern = new RegExp(`(${phrase})`, "gi");
+  if (!pattern.test(text)) {
+    pattern = new RegExp(`(${tokens.map(escapeRegExp).join("|")})`, "gi");
+  }
+  pattern.lastIndex = 0;
+
+  let html = "";
+  let last = 0;
+  text.replace(pattern, (match, _unused, offset) => {
+    html += escapeHtml(text.slice(last, offset));
+    html += `<mark>${escapeHtml(match)}</mark>`;
+    last = offset + match.length;
+    return match;
+  });
+  html += escapeHtml(text.slice(last));
+  return html;
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function escapeHtml(value) {
