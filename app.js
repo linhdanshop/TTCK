@@ -406,6 +406,7 @@ async function onCheckedChange(event) {
   } catch (error) {
     input.checked = !checked;
     showToast(readError(error));
+    if (isSlowApiError(error) && hasFilters()) await searchTransactions();
   } finally {
     input.disabled = false;
   }
@@ -422,6 +423,7 @@ async function onNoteBlur(event) {
     state.statsLoaded = false;
   } catch (error) {
     showToast(readError(error));
+    if (isSlowApiError(error) && hasFilters()) await searchTransactions();
   } finally {
     input.disabled = false;
   }
@@ -824,25 +826,32 @@ async function callApi(action, payload = {}, forceToken = false) {
 }
 
 async function apiRequest(params) {
-  const transports = [
-    ["jsonp", jsonpRequest],
-    ["fetch", fetchRequest],
-  ];
-  let lastError = null;
+  const transports = apiTransports(params.action);
+  const errors = [];
   for (const [name, request] of transports) {
     try {
       const result = await request(params, apiTimeoutMs(params.action, name));
       return result;
     } catch (error) {
-      lastError = error;
+      errors.push(error);
       console.warn(`${name} Apps Script failed`, error);
     }
   }
-  throw new Error(readError(lastError) || "Không gọi được Apps Script Web App.");
+  throw new Error(readError(errors[0]) || "Không gọi được Apps Script Web App.");
+}
+
+function apiTransports(action) {
+  const writeActions = ["setChecked", "saveNote", "saveEmployees", "deleteHistoryMonth", "syncGmail", "setAutoSync", "setDailyAuto", "selectEmployee"];
+  if (writeActions.includes(action)) return [["jsonp", jsonpRequest]];
+  return [
+    ["jsonp", jsonpRequest],
+    ["fetch", fetchRequest],
+  ];
 }
 
 function apiTimeoutMs(action, transport) {
   if (action === "syncGmail") return 120000;
+  if (action === "setChecked" || action === "saveNote") return 60000;
   if (transport === "fetch") return 8000;
   if (action === "searchTransactions") return 30000;
   return 30000;
@@ -991,7 +1000,14 @@ function showToast(message) {
 
 function readError(error) {
   const raw = error && (error.message || error.code || String(error));
-  return raw ? raw.replace(/^Firebase:\s*/i, "") : "Có lỗi xảy ra";
+  if (!raw) return "Có lỗi xảy ra";
+  if (isSlowApiError(raw)) return "Apps Script phản hồi chậm hoặc mạng bị ngắt. Tải lại trạng thái rồi thử lại.";
+  return raw.replace(/^Firebase:\s*/i, "");
+}
+
+function isSlowApiError(error) {
+  const raw = String(error && (error.message || error.code || error) || "");
+  return /abort|aborted|timeout|quá lâu|phản hồi chậm|signal is aborted/i.test(raw);
 }
 
 function highlightContent(value, query) {
