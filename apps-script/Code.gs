@@ -186,8 +186,8 @@ function route_(action, payload, idToken, session) {
 
     case 'syncGmail':
       const syncDays = Number(payload.days || 1);
-      if (user.role !== 'admin' && syncDays !== 10) {
-        throw new Error('Nhân viên chỉ được cập nhật 10 ngày trước.');
+      if (user.role !== 'admin' && syncDays !== 1) {
+        throw new Error('Nhân viên chỉ được cập nhật hôm nay.');
       }
       data = syncGmailByDays_(syncDays, user.email);
       break;

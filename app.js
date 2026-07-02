@@ -494,7 +494,7 @@ function filterStatsRows(rows) {
 }
 
 async function syncGmail(days) {
-  if (!isAdmin() && days !== 10) return;
+  if (!isAdmin() && days !== 1) return;
   const label = days === 1 ? "hôm nay" : "10 ngày trước";
   setBusy(`Đang cập nhật Gmail ${label}...`);
   try {
