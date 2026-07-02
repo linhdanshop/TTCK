@@ -100,6 +100,11 @@ const DEFAULT_SETTINGS = [
     note: 'Giờ auto mỗi ngày theo định dạng HH:mm.'
   },
   {
+    key: 'dailySyncTimes',
+    value: '08:00,10:00,13:00,15:00,19:00',
+    note: 'Các khung giờ Apps Script tự lấy Gmail mỗi ngày. Chạy setupTTCK() lại sau khi đổi.'
+  },
+  {
     key: 'autoSyncMinutes',
     value: '0',
     note: '0 là tắt auto Apps Script trigger. Mốc hợp lệ: 1, 5, 10, 15, 30 phút.'
@@ -108,7 +113,8 @@ const DEFAULT_SETTINGS = [
 
 function setupTTCK() {
   ensureAll_(true);
-  return 'Đã tạo/cập nhật sheet TTCK và tab CAI_DAT.';
+  setupDefaultDailySyncTriggers_();
+  return 'Đã tạo/cập nhật sheet TTCK, CAI_DAT và trigger tự cập nhật Gmail.';
 }
 
 function doGet(e) {
@@ -627,11 +633,42 @@ function syncGmailByDays_(days, actorEmail) {
     'Cập nhật Gmail',
     (days === 1 ? 'Hôm nay' : days + ' ngày') + ': thêm ' + added + ', trùng ' + duplicated + ', bỏ qua ' + skipped
   );
-  return { added, duplicated, skipped };
+  const firebaseRows = readDataRows_()
+    .filter(row => Number(row.timestamp || 0) >= start.getTime())
+    .sort((a, b) => b.timestamp - a.timestamp)
+    .slice(0, 5000)
+    .map(formatRowForFirebase_);
+  return { added, duplicated, skipped, firebaseRows };
 }
 
 function autoSyncToday() {
   syncGmailByDays_(1, 'auto');
+}
+
+function scheduledSyncToday() {
+  syncGmailByDays_(1, 'schedule');
+}
+
+function setupDefaultDailySyncTriggers_() {
+  const settings = readSettings_();
+  const times = String(settings.dailySyncTimes || '08:00,10:00,13:00,15:00,19:00')
+    .split(',')
+    .map(item => normalizeTime_(item))
+    .filter(Boolean);
+
+  ScriptApp.getProjectTriggers().forEach(trigger => {
+    if (trigger.getHandlerFunction() === 'scheduledSyncToday') ScriptApp.deleteTrigger(trigger);
+  });
+
+  times.forEach(time => {
+    const parts = time.split(':').map(Number);
+    ScriptApp.newTrigger('scheduledSyncToday')
+      .timeBased()
+      .atHour(parts[0])
+      .nearMinute(parts[1])
+      .everyDays(1)
+      .create();
+  });
 }
 
 function buildGmailSearchQuery_(settings, queryDays) {
@@ -822,6 +859,24 @@ function formatRowForWeb_(row, canWrite) {
     actorName: row.actorName || '',
     actionAtText: row.actionAt ? formatDateTime_(row.actionAt) : '',
     canWrite: !!canWrite
+  };
+}
+
+function formatRowForFirebase_(row) {
+  return {
+    id: row.id,
+    dateText: row.dateText,
+    dateKey: row.dateKey,
+    time: row.time,
+    timestamp: Number(row.timestamp || 0),
+    amount: Number(row.amount || 0),
+    content: row.content || '',
+    type: row.type || 'Ghi có',
+    checked: !!row.checked,
+    note: row.note || '',
+    actorName: row.actorName || '',
+    actionAtText: row.actionAt ? formatDateTime_(row.actionAt) : '',
+    createdAt: row.createdAt ? row.createdAt.getTime() : Date.now()
   };
 }
 
@@ -1091,6 +1146,7 @@ function readSettings_() {
     autoSyncMinutes: Number(map.autoSyncMinutes || 0),
     dailyAutoEnabled: map.dailyAutoEnabled === '1',
     dailyAutoTime: normalizeTime_(map.dailyAutoTime || '08:00'),
+    dailySyncTimes: String(map.dailySyncTimes || '08:00,10:00,13:00,15:00,19:00').trim(),
     sourceEmail: String(map.sourceEmail || CONFIG.ACB_FROM).trim() || CONFIG.ACB_FROM,
     gmailExtraQuery: String(map.gmailExtraQuery || '').trim(),
     creditText: String(map.creditText || 'Ghi có').trim() || 'Ghi có',

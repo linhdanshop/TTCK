@@ -8,11 +8,21 @@ import {
   signInWithPopup,
   signOut,
 } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+import {
+  equalTo,
+  get,
+  getDatabase,
+  orderByChild,
+  query as dbQuery,
+  ref as dbRef,
+  update as dbUpdate,
+} from "https://www.gstatic.com/firebasejs/10.12.5/firebase-database.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyDR0zkPrbqQRot8KLajCPSF9nQ3qavPlrc",
   authDomain: "ttck-a7176.firebaseapp.com",
   projectId: "ttck-a7176",
+  databaseURL: "https://ttck-a7176-default-rtdb.asia-southeast1.firebasedatabase.app",
   storageBucket: "ttck-a7176.firebasestorage.app",
   messagingSenderId: "882092560518",
   appId: "1:882092560518:web:c6ff98db205ab578cb4107",
@@ -24,6 +34,7 @@ const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxfSqZ9veQh1K64
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
+const db = getDatabase(app);
 const provider = new GoogleAuthProvider();
 provider.setCustomParameters({ prompt: "select_account" });
 
@@ -312,15 +323,17 @@ async function searchTransactions() {
     if (token === state.searchToken) setBusy("Apps Script đang xử lý hơi lâu, chờ thêm chút...");
   }, 8000);
   const parsedAmount = parseAmount(elements.amountInput.value);
+  const payload = {
+    mode: state.mode,
+    query: elements.queryInput.value.trim(),
+    amount: parsedAmount === null ? "" : parsedAmount,
+    date: elements.dateInput.value,
+    time: elements.timeInput.value,
+  };
   try {
-    const data = await callApi("searchTransactions", {
-      mode: state.mode,
-      query: elements.queryInput.value.trim(),
-      amount: parsedAmount === null ? "" : parsedAmount,
-      date: elements.dateInput.value,
-      time: elements.timeInput.value,
-    });
+    const data = (await searchRealtimeTransactions(payload)) || (await callApi("searchTransactions", payload));
     if (token !== state.searchToken) return;
+    if (data.firebaseRows) mirrorRowsToRealtime(data.firebaseRows).catch(console.warn);
     const rows = data.rows || [];
     state.filteredRows = isAdmin()
       ? rows
@@ -402,6 +415,7 @@ async function onCheckedChange(event) {
   try {
     const data = await callApi("setChecked", { id, checked });
     updateFilteredRow(data.row);
+    mirrorActionToRealtime(data.row).catch(console.warn);
     state.statsLoaded = false;
   } catch (error) {
     input.checked = !checked;
@@ -420,6 +434,7 @@ async function onNoteBlur(event) {
   try {
     const data = await callApi("saveNote", { id, note: input.value.trim() });
     updateFilteredRow(data.row);
+    mirrorActionToRealtime(data.row).catch(console.warn);
     state.statsLoaded = false;
   } catch (error) {
     showToast(readError(error));
@@ -433,6 +448,93 @@ function updateFilteredRow(row) {
   if (!row || !row.id) return;
   state.filteredRows = state.filteredRows.map((item) => (item.id === row.id ? { ...item, ...row } : item));
   renderFiltered();
+}
+
+async function searchRealtimeTransactions(payload) {
+  if (!auth.currentUser || !state.profile) return null;
+  const basePath = isAdmin() ? "transactionsAdmin" : "transactionsStaff";
+  const baseRef = dbRef(db, basePath);
+  const dateKey = payload.date ? dateKeyFromInputValue(payload.date) : "";
+  const snap = dateKey
+    ? await get(dbQuery(baseRef, orderByChild("dateKey"), equalTo(dateKey)))
+    : await get(baseRef);
+  if (!snap.exists()) return null;
+
+  const actionsSnap = await get(dbRef(db, "actions"));
+  const actions = actionsSnap.exists() ? actionsSnap.val() || {} : {};
+  const amount = payload.amount === "" || payload.amount === null || payload.amount === undefined ? null : Number(payload.amount);
+  const rows = [];
+  snap.forEach((child) => {
+    const row = normalizeRealtimeRow(child.key, child.val(), actions[child.key]);
+    if (!row.id) return;
+    if (!isAdmin() && Number(row.amount || 0) > STAFF_AMOUNT_LIMIT) return;
+    if (amount !== null && Number(row.amount) !== amount) return;
+    if (payload.time && String(row.time || "").indexOf(payload.time) !== 0) return;
+    if (!matchContentLocal(row.content, payload.query, payload.mode)) return;
+    rows.push(row);
+  });
+  rows.sort((a, b) => Number(b.timestamp || 0) - Number(a.timestamp || 0));
+  return {
+    rows: rows.slice(0, 500),
+    total: rows.length,
+    totalAmount: rows.slice(0, 500).reduce((sum, row) => sum + Number(row.amount || 0), 0),
+    message: rows.length > 500 ? "Đang hiển thị 500 dòng mới nhất từ Realtime." : "",
+  };
+}
+
+function normalizeRealtimeRow(id, value, action) {
+  const row = value || {};
+  const act = action || {};
+  return {
+    id,
+    dateText: row.dateText || "",
+    dateKey: row.dateKey || "",
+    time: row.time || "",
+    timestamp: Number(row.timestamp || 0),
+    amount: Number(row.amount || 0),
+    content: row.content || "",
+    type: row.type || "Ghi có",
+    checked: act.checked !== undefined ? !!act.checked : !!row.checked,
+    note: act.note !== undefined ? act.note || "" : row.note || "",
+    actorName: act.actorName !== undefined ? act.actorName || "" : row.actorName || "",
+    actionAtText: act.actionAtText !== undefined ? act.actionAtText || "" : row.actionAtText || "",
+    canWrite: !!row.canWrite || currentUserCanWrite(),
+  };
+}
+
+function currentUserCanWrite() {
+  if (!state.profile) return false;
+  if (state.profile.role === "admin") return true;
+  const employee = state.employees.find((item) => item.id === state.profile.employeeId);
+  return !!employee && employee.permission === "write";
+}
+
+function dateKeyFromInputValue(value) {
+  return String(value || "").replace(/[^\d]/g, "");
+}
+
+function dateKeyFromText(value) {
+  const match = String(value || "").match(/(\d{2})\/(\d{2})\/(\d{4})/);
+  return match ? `${match[3]}${match[2]}${match[1]}` : "";
+}
+
+function matchContentLocal(content, query, mode) {
+  const needle = foldText(query);
+  if (!needle) return true;
+  const source = foldText(content);
+  if (mode === "exact") return source.includes(needle);
+  return needle.split(/\s+/).filter(Boolean).every((token) => source.includes(token));
+}
+
+function foldText(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/đ/g, "d")
+    .replace(/Đ/g, "d")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 async function loadStats() {
@@ -514,6 +616,7 @@ async function syncGmail(days) {
   setBusy(`Đang cập nhật Gmail ${label}...`);
   try {
     const data = await callApi("syncGmail", { days });
+    if (data.firebaseRows) await mirrorRowsToRealtime(data.firebaseRows);
     setReady(`Thêm mới ${data.added || 0}, trùng ${data.duplicated || 0}`);
     showToast(`Đã cập nhật: thêm ${data.added || 0}, trùng ${data.duplicated || 0}`);
     if (hasFilters()) await searchTransactions();
@@ -522,6 +625,54 @@ async function syncGmail(days) {
     showToast(readError(error));
     setReady("Lỗi cập nhật Gmail");
   }
+}
+
+async function mirrorRowsToRealtime(rows) {
+  if (!auth.currentUser || !Array.isArray(rows) || !rows.length) return;
+  const updates = {};
+  rows.forEach((row) => {
+    if (!row || !row.id) return;
+    const clean = toRealtimeRow(row);
+    if (isAdmin()) updates[`transactionsAdmin/${row.id}`] = clean;
+    if (Number(row.amount || 0) <= STAFF_AMOUNT_LIMIT) updates[`transactionsStaff/${row.id}`] = clean;
+    else if (isAdmin()) updates[`transactionsStaff/${row.id}`] = null;
+    const action = toRealtimeAction(row);
+    if (action && isAdmin()) updates[`actions/${row.id}`] = action;
+  });
+  if (Object.keys(updates).length) await dbUpdate(dbRef(db), updates);
+}
+
+async function mirrorActionToRealtime(row) {
+  if (!auth.currentUser || !row || !row.id) return;
+  const action = toRealtimeAction(row);
+  if (!action) return;
+  await dbUpdate(dbRef(db), { [`actions/${row.id}`]: action });
+}
+
+function toRealtimeRow(row) {
+  return {
+    id: row.id,
+    dateText: row.dateText || "",
+    dateKey: row.dateKey || dateKeyFromText(row.dateText),
+    time: row.time || "",
+    timestamp: Number(row.timestamp || 0),
+    amount: Number(row.amount || 0),
+    content: row.content || "",
+    type: row.type || "Ghi có",
+    createdAt: Number(row.createdAt || Date.now()),
+  };
+}
+
+function toRealtimeAction(row) {
+  if (!row.checked && !row.note && !row.actorName && !row.actionAtText) return null;
+  return {
+    checked: !!row.checked,
+    note: row.note || "",
+    actorName: row.actorName || "",
+    actionAtText: row.actionAtText || "",
+    actorEmail: auth.currentUser ? auth.currentUser.email || "" : "",
+    updatedAt: Date.now(),
+  };
 }
 
 function openEmployeeDialog() {
