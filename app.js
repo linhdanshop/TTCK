@@ -710,7 +710,7 @@ async function syncGmail(days) {
   setBusy(`Đang cập nhật Gmail ${label}...`);
   try {
     const firebaseIdToken = await getCurrentFirebaseIdToken();
-    const data = await callApi("syncGmail", { days, firebaseIdToken });
+    const data = await callApi("syncGmail", { days, firebaseIdToken, skipServerMirror: true });
     const realtimeText = await resolveRealtimeMirrorText(data);
     setReady(`Thêm mới ${data.added || 0}, trùng ${data.duplicated || 0}${realtimeText}`);
     showToast(`Đã cập nhật: thêm ${data.added || 0}, trùng ${data.duplicated || 0}${realtimeText}`);
@@ -1057,7 +1057,7 @@ async function checkDailyAuto() {
   try {
     setBusy(`Auto ngày ${runTime}: đang cập nhật hôm nay...`);
     const firebaseIdToken = await getCurrentFirebaseIdToken();
-    const data = await callApi("syncGmail", { days: 1, firebaseIdToken });
+    const data = await callApi("syncGmail", { days: 1, firebaseIdToken, skipServerMirror: true });
     const realtimeText = await resolveRealtimeMirrorText(data);
     localStorage.setItem(lastKey, today);
     state.statsLoaded = false;

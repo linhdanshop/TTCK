@@ -220,7 +220,8 @@ function route_(action, payload, idToken, session) {
       data = syncGmailByDays_(syncDays, user.email, {
         firebaseIdToken: getPayloadFirebaseToken_(payload),
         userRole: user.role,
-        userEmail: user.email
+        userEmail: user.email,
+        skipServerMirror: payload && payload.skipServerMirror === true
       });
       break;
 
@@ -493,11 +494,6 @@ function setChecked_(user, payload, firebaseIdToken) {
 
   const after = readDataRowAt_(row);
   writeHistory_(actor, after, checked ? 'Tích chọn' : 'Bỏ tích', after.content, before, after);
-  mirrorRowsToRealtimeSafely_([formatRowForFirebase_(after)], {
-    firebaseIdToken,
-    userRole: user.role,
-    userEmail: user.email
-  });
   return { row: formatRowForWeb_(after, true) };
 }
 
@@ -516,11 +512,6 @@ function saveNote_(user, payload, firebaseIdToken) {
   sh.getRange(row, 11, 1, 5).setValues([[note, actorName, actionAt, before.createdAt || new Date(), actorEmail]]);
   const after = readDataRowAt_(row);
   writeHistory_(actor, after, 'Ghi chú', note || 'Xóa ghi chú', before, after);
-  mirrorRowsToRealtimeSafely_([formatRowForFirebase_(after)], {
-    firebaseIdToken,
-    userRole: user.role,
-    userEmail: user.email
-  });
   return { row: formatRowForWeb_(after, true) };
 }
 
@@ -674,7 +665,9 @@ function syncGmailByDays_(days, actorEmail, realtimeOptions) {
     .sort((a, b) => b.timestamp - a.timestamp)
     .slice(0, 5000)
     .map(formatRowForFirebase_);
-  const firebaseMirror = mirrorRowsToRealtimeSafely_(firebaseRows, realtimeOptions || {});
+  const firebaseMirror = realtimeOptions && realtimeOptions.skipServerMirror === true
+    ? { ok: false, skipped: true, webFallback: true, count: 0, pathCount: 0 }
+    : mirrorRowsToRealtimeSafely_(firebaseRows, realtimeOptions || {});
   return { added, duplicated, skipped, firebaseRows, firebaseMirror };
 }
 
