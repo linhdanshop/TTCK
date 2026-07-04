@@ -77,9 +77,13 @@
                 <i data-lucide="refresh-cw"></i>
                 Cập nhật hôm nay
               </button>
-              <button id="sync10DaysBtn" class="soft-btn admin-only" type="button" title="Lấy thêm toàn bộ email ACB ghi có trong phạm vi lưu Gmail. Giao dịch đã có sẽ bỏ qua.">
+              <button id="sync7DaysBtn" class="soft-btn admin-only" type="button" title="Lấy thêm email ACB ghi có trong 7 ngày gần nhất, bao gồm hôm nay. Giao dịch đã có sẽ bỏ qua.">
                 <i data-lucide="calendar-clock"></i>
-                Cập nhật tất cả
+                Cập nhật 7 ngày
+              </button>
+              <button id="sync10DaysBtn" class="soft-btn admin-only" type="button" title="Lấy thêm email ACB ghi có từ đầu tháng hiện tại đến hôm nay. Giao dịch đã có sẽ bỏ qua.">
+                <i data-lucide="calendar-days"></i>
+                Cập nhật tháng hiện tại
               </button>
             </div>
           </aside>
@@ -277,6 +281,6 @@
     <div id="toast" class="toast hidden"></div>
 
     <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
-    <script type="module" src="./app.js?v=rtdb-20260704-01"></script>
+    <script type="module" src="./app.js?v=rtdb-20260704-02"></script>
   </body>
 </html>

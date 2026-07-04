@@ -225,8 +225,9 @@ function route_(action, payload, idToken, session) {
 
     case 'syncGmail':
       const syncAll = payload && payload.syncAll === true;
-      const syncDays = syncAll ? CONFIG.FULL_SYNC_DAYS : Number(payload.days || 1);
-      if (user.role !== 'admin' && (syncAll || syncDays !== 1)) {
+      const syncMonth = payload && payload.syncMonth === true;
+      const syncDays = syncMonth ? currentMonthSyncDays_() : (syncAll ? CONFIG.FULL_SYNC_DAYS : Number(payload.days || 1));
+      if (user.role !== 'admin' && (syncAll || syncMonth || syncDays !== 1)) {
         throw new Error('Nhân viên chỉ được cập nhật hôm nay.');
       }
       data = syncGmailByDays_(syncDays, user.email, {
@@ -234,6 +235,7 @@ function route_(action, payload, idToken, session) {
         userRole: user.role,
         userEmail: user.email,
         syncAll,
+        syncMonth,
         skipServerMirror: payload && payload.skipServerMirror === true
       });
       break;
@@ -619,13 +621,14 @@ function deleteHistoryMonth_(monthInput) {
 function syncGmailByDays_(days, actorEmail, realtimeOptions) {
   realtimeOptions = realtimeOptions || {};
   const syncAll = realtimeOptions.syncAll === true;
+  const syncMonth = realtimeOptions.syncMonth === true;
   days = syncAll
     ? CONFIG.FULL_SYNC_DAYS
     : Math.max(1, Math.min(CONFIG.FULL_SYNC_DAYS, Math.floor(days || 1)));
   ensureAll_();
   const start = startDateForDays_(days);
   const queryDays = Math.max(days + 1, 2);
-  const syncLabel = syncAll ? 'Tất cả' : (days === 1 ? 'Hôm nay' : days + ' ngày');
+  const syncLabel = syncMonth ? 'Tháng hiện tại' : (syncAll ? 'Tất cả' : (days === 1 ? 'Hôm nay' : days + ' ngày'));
   const settings = readSettings_();
   const query = buildGmailSearchQuery_(settings, queryDays);
   const existing = {};
@@ -684,9 +687,7 @@ function syncGmailByDays_(days, actorEmail, realtimeOptions) {
     .sort((a, b) => b.timestamp - a.timestamp)
     .slice(0, 5000)
     .map(formatRowForFirebase_);
-  const firebaseMirror = realtimeOptions && realtimeOptions.skipServerMirror === true
-    ? { ok: false, skipped: true, webFallback: true, count: 0, pathCount: 0 }
-    : mirrorRowsToRealtimeSafely_(firebaseRows, realtimeOptions);
+  const firebaseMirror = { ok: false, skipped: true, webFallback: true, count: 0, pathCount: 0 };
   return { added, duplicated, skipped, firebaseRows, firebaseMirror };
 }
 
@@ -1029,9 +1030,6 @@ function mirrorRowsToRealtimeSafely_(rows, options) {
         error: 'Realtime chưa có Firebase token hoặc service account.'
       };
     }
-    try {
-      writeSyncLog_('Realtime lỗi', 0, 0, 0, message);
-    } catch (logErr) {}
     return { ok: false, count: 0, pathCount: 0, error: message };
   }
 }
@@ -1102,9 +1100,6 @@ function testRealtimeConnection_() {
     if (message === '__REALTIME_NO_AUTH__') {
       return { ok: true, message: 'Realtime sẽ ghi khi web gửi Firebase token. Trigger tự động cần service account trong CAI_DAT.' };
     }
-    try {
-      writeSyncLog_('Realtime lỗi', 0, 0, 0, message);
-    } catch (logErr) {}
     return { ok: false, message: 'Realtime chưa ghi được: ' + message };
   }
 }
@@ -1571,6 +1566,11 @@ function startDateForDays_(days) {
   const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   if (days > 1) start.setDate(start.getDate() - days + 1);
   return start;
+}
+
+function currentMonthSyncDays_() {
+  const now = new Date();
+  return Math.max(1, now.getDate());
 }
 
 function buildId_(transactionCode, messageId, timestamp, amount) {

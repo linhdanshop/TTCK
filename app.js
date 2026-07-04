@@ -40,7 +40,6 @@ provider.setCustomParameters({ prompt: "select_account" });
 
 const SESSION_MS = 30 * 24 * 60 * 60 * 1000;
 const STAFF_AMOUNT_LIMIT = 2_000_000;
-const SYNC_ALL_DAYS = 3650;
 
 const state = {
   mode: "exact",
@@ -104,6 +103,7 @@ const elements = {
   loadHistoryBtn: $("loadHistoryBtn"),
   deleteHistoryBtn: $("deleteHistoryBtn"),
   syncTodayBtn: $("syncTodayBtn"),
+  sync7DaysBtn: $("sync7DaysBtn"),
   sync10DaysBtn: $("sync10DaysBtn"),
   autoSyncBtn: $("autoSyncBtn"),
   autoSyncDialog: $("autoSyncDialog"),
@@ -233,7 +233,8 @@ elements.statsLoadBtn.addEventListener("click", loadStats);
   });
 });
 elements.syncTodayBtn.addEventListener("click", () => syncGmail(1));
-elements.sync10DaysBtn.addEventListener("click", () => syncGmail("all"));
+elements.sync7DaysBtn.addEventListener("click", () => syncGmail(7));
+elements.sync10DaysBtn.addEventListener("click", () => syncGmail("month"));
 elements.chooseEmployeeBtn.addEventListener("click", openEmployeeDialog);
 elements.permissionsBtn.addEventListener("click", openPermissionsDialog);
 elements.addEmployeeBtn.addEventListener("click", addEmployeeDraft);
@@ -706,16 +707,16 @@ function filterStatsRows(rows) {
 }
 
 async function syncGmail(scope) {
-  const syncAll = scope === "all";
-  const days = syncAll ? SYNC_ALL_DAYS : Number(scope || 1);
+  const syncMonth = scope === "month";
+  const days = syncMonth ? currentMonthDayCount() : Number(scope || 1);
   if (!isAdmin() && days !== 1) return;
-  const label = syncAll ? "tất cả" : "hôm nay";
+  const label = syncMonth ? "tháng hiện tại" : days === 7 ? "7 ngày" : "hôm nay";
   setBusy(`Đang cập nhật Gmail ${label}...`);
   try {
     const firebaseIdToken = await getCurrentFirebaseIdToken();
     const data = await callApi("syncGmail", {
       days,
-      syncAll,
+      syncMonth,
       firebaseIdToken,
       skipServerMirror: true,
     });
@@ -728,6 +729,11 @@ async function syncGmail(scope) {
     showToast(readError(error));
     setReady("Lỗi cập nhật Gmail");
   }
+}
+
+function currentMonthDayCount() {
+  const now = new Date();
+  return Math.max(1, now.getDate());
 }
 
 async function resolveRealtimeMirrorText(data) {
