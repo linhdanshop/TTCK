@@ -10,6 +10,9 @@ const CONFIG = {
   ACB_FROM: 'mailalert@acb.com.vn',
   MAX_SEARCH_ROWS: 500,
   MAX_GMAIL_THREADS: 2000,
+  FULL_SYNC_DAYS: 3650,
+  SCHEDULE_CHECK_MINUTES: 5,
+  SCHEDULE_WINDOW_MINUTES: 10,
   SESSION_SECONDS: 21600,
   STAFF_AMOUNT_LIMIT: 2000000,
   FIREBASE_API_KEY: 'AIzaSyDR0zkPrbqQRot8KLajCPSF9nQ3qavPlrc',
@@ -103,7 +106,7 @@ const DEFAULT_SETTINGS = [
   {
     key: 'dailySyncTimes',
     value: '08:00,10:00,13:00,15:00,19:00',
-    note: 'Các khung giờ Apps Script tự lấy Gmail mỗi ngày. Chạy setupTTCK() lại sau khi đổi.'
+    note: 'Các khung giờ Apps Script tự lấy Gmail mỗi ngày. setupTTCK() tạo một trigger kiểm tra mỗi 5 phút; sau đó có thể đổi giờ ngay trong sheet.'
   },
   {
     key: 'realtimeDatabaseUrl',
@@ -113,7 +116,12 @@ const DEFAULT_SETTINGS = [
   {
     key: 'realtimeMirrorEnabled',
     value: '1',
-    note: '1 là Apps Script tự ghi dữ liệu sang Realtime sau khi cập nhật Gmail, 0 là chỉ lưu Sheet.'
+    note: 'Giữ để tương thích bản cũ. Web hiện tự ghi Realtime; trigger Apps Script chỉ lưu Sheet nếu serverRealtimeMirrorEnabled = 0.'
+  },
+  {
+    key: 'serverRealtimeMirrorEnabled',
+    value: '0',
+    note: '0 là không cho Apps Script server ghi Realtime để tránh lỗi 401. Chỉ bật 1 khi đã có service account và rules cho phép service account đó ghi.'
   },
   {
     key: 'serviceAccountEmail',
@@ -213,14 +221,16 @@ function route_(action, payload, idToken, session) {
       break;
 
     case 'syncGmail':
-      const syncDays = Number(payload.days || 1);
-      if (user.role !== 'admin' && syncDays !== 1) {
+      const syncAll = payload && payload.syncAll === true;
+      const syncDays = syncAll ? CONFIG.FULL_SYNC_DAYS : Number(payload.days || 1);
+      if (user.role !== 'admin' && (syncAll || syncDays !== 1)) {
         throw new Error('Nhân viên chỉ được cập nhật hôm nay.');
       }
       data = syncGmailByDays_(syncDays, user.email, {
         firebaseIdToken: getPayloadFirebaseToken_(payload),
         userRole: user.role,
         userEmail: user.email,
+        syncAll,
         skipServerMirror: payload && payload.skipServerMirror === true
       });
       break;
@@ -604,10 +614,15 @@ function deleteHistoryMonth_(monthInput) {
 }
 
 function syncGmailByDays_(days, actorEmail, realtimeOptions) {
-  days = Math.max(1, Math.min(30, Math.floor(days || 1)));
+  realtimeOptions = realtimeOptions || {};
+  const syncAll = realtimeOptions.syncAll === true;
+  days = syncAll
+    ? CONFIG.FULL_SYNC_DAYS
+    : Math.max(1, Math.min(CONFIG.FULL_SYNC_DAYS, Math.floor(days || 1)));
   ensureAll_();
   const start = startDateForDays_(days);
   const queryDays = Math.max(days + 1, 2);
+  const syncLabel = syncAll ? 'Tất cả' : (days === 1 ? 'Hôm nay' : days + ' ngày');
   const settings = readSettings_();
   const query = buildGmailSearchQuery_(settings, queryDays);
   const existing = {};
@@ -654,11 +669,12 @@ function syncGmailByDays_(days, actorEmail, realtimeOptions) {
     sortDataSheet_();
   }
   if (debugRows.length) appendRows_(getSheet_(CONFIG.SHEETS.DEBUG), debugRows);
-  writeSyncLog_(days === 1 ? 'Hôm nay' : days + ' ngày', added, duplicated, skipped, actorEmail || '');
+  writeSyncLog_(syncLabel, added, duplicated, skipped, actorEmail || '');
+  const autoActor = actorEmail === 'auto' || String(actorEmail || '').indexOf('schedule') === 0;
   writeSimpleHistory_(
-    { name: actorEmail === 'auto' ? 'Auto' : 'Admin', email: actorEmail || '' },
+    { name: autoActor ? 'Auto' : 'Admin', email: actorEmail || '' },
     'Cập nhật Gmail',
-    (days === 1 ? 'Hôm nay' : days + ' ngày') + ': thêm ' + added + ', trùng ' + duplicated + ', bỏ qua ' + skipped
+    syncLabel + ': thêm ' + added + ', trùng ' + duplicated + ', bỏ qua ' + skipped
   );
   const firebaseRows = readDataRows_()
     .filter(row => Number(row.timestamp || 0) >= start.getTime())
@@ -667,37 +683,87 @@ function syncGmailByDays_(days, actorEmail, realtimeOptions) {
     .map(formatRowForFirebase_);
   const firebaseMirror = realtimeOptions && realtimeOptions.skipServerMirror === true
     ? { ok: false, skipped: true, webFallback: true, count: 0, pathCount: 0 }
-    : mirrorRowsToRealtimeSafely_(firebaseRows, realtimeOptions || {});
+    : mirrorRowsToRealtimeSafely_(firebaseRows, realtimeOptions);
   return { added, duplicated, skipped, firebaseRows, firebaseMirror };
 }
 
 function autoSyncToday() {
-  syncGmailByDays_(1, 'auto');
+  syncGmailByDays_(1, 'auto', { skipServerMirror: true });
 }
 
 function scheduledSyncToday() {
-  syncGmailByDays_(1, 'schedule');
+  runScheduledSyncDispatcher_();
+}
+
+function runScheduledSyncDispatcher_() {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(1000)) return;
+  try {
+    ensureAll_();
+    const settings = readSettings_();
+    const times = getDailySyncTimes_(settings);
+    const now = new Date();
+    const today = Utilities.formatDate(now, CONFIG.TZ, 'yyyyMMdd');
+    const currentMinutes = Number(Utilities.formatDate(now, CONFIG.TZ, 'H')) * 60
+      + Number(Utilities.formatDate(now, CONFIG.TZ, 'm'));
+    const props = PropertiesService.getScriptProperties();
+    cleanupScheduleRunKeys_(props, today);
+
+    times.forEach(time => {
+      const targetMinutes = timeToMinutes_(time);
+      if (currentMinutes < targetMinutes || currentMinutes >= targetMinutes + CONFIG.SCHEDULE_WINDOW_MINUTES) return;
+
+      const runKey = 'ttck_scheduled_sync_' + today + '_' + time.replace(':', '');
+      if (props.getProperty(runKey)) return;
+      props.setProperty(runKey, String(Date.now()));
+      try {
+        syncGmailByDays_(1, 'schedule ' + time, { skipServerMirror: true, scheduledTime: time });
+      } catch (err) {
+        props.deleteProperty(runKey);
+        writeSyncLog_('Lỗi lịch ' + time, 0, 0, 0, err && err.message ? err.message : String(err));
+      }
+    });
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 function setupDefaultDailySyncTriggers_() {
-  const settings = readSettings_();
-  const times = String(settings.dailySyncTimes || '08:00,10:00,13:00,15:00,19:00')
-    .split(',')
-    .map(item => normalizeTime_(item))
-    .filter(Boolean);
-
   ScriptApp.getProjectTriggers().forEach(trigger => {
     if (trigger.getHandlerFunction() === 'scheduledSyncToday') ScriptApp.deleteTrigger(trigger);
   });
 
-  times.forEach(time => {
-    const parts = time.split(':').map(Number);
-    ScriptApp.newTrigger('scheduledSyncToday')
-      .timeBased()
-      .atHour(parts[0])
-      .nearMinute(parts[1])
-      .everyDays(1)
-      .create();
+  ScriptApp.newTrigger('scheduledSyncToday')
+    .timeBased()
+    .everyMinutes(CONFIG.SCHEDULE_CHECK_MINUTES)
+    .create();
+}
+
+function getDailySyncTimes_(settings) {
+  const seen = {};
+  return String(settings.dailySyncTimes || '08:00,10:00,13:00,15:00,19:00')
+    .split(',')
+    .map(item => String(item || '').trim())
+    .filter(Boolean)
+    .map(item => normalizeTime_(item))
+    .filter(time => {
+      if (seen[time]) return false;
+      seen[time] = true;
+      return true;
+    });
+}
+
+function timeToMinutes_(time) {
+  const parts = normalizeTime_(time).split(':').map(Number);
+  return parts[0] * 60 + parts[1];
+}
+
+function cleanupScheduleRunKeys_(props, today) {
+  const all = props.getProperties();
+  Object.keys(all).forEach(key => {
+    if (key.indexOf('ttck_scheduled_sync_') === 0 && key.indexOf('ttck_scheduled_sync_' + today + '_') !== 0) {
+      props.deleteProperty(key);
+    }
   });
 }
 
@@ -937,8 +1003,11 @@ function mirrorRowsToRealtimeSafely_(rows, options) {
 function mirrorRowsToRealtime_(rows, settings, options) {
   settings = settings || readSettings_();
   options = options || {};
+  if (settings.serverRealtimeMirrorEnabled !== true) {
+    return { ok: true, count: 0, pathCount: 0, disabled: true, webFallback: true };
+  }
   if (settings.realtimeMirrorEnabled === false) {
-    return { ok: true, count: 0, pathCount: 0, disabled: true };
+    return { ok: true, count: 0, pathCount: 0, disabled: true, webFallback: true };
   }
 
   const updates = {};
@@ -979,6 +1048,9 @@ function mirrorRowsToRealtime_(rows, settings, options) {
 function testRealtimeConnection_() {
   try {
     const settings = readSettings_();
+    if (settings.serverRealtimeMirrorEnabled !== true) {
+      return { ok: true, message: 'Realtime server mirror đang tắt; web sẽ tự đẩy Realtime để tránh lỗi 401.' };
+    }
     if (settings.realtimeMirrorEnabled === false) {
       return { ok: true, message: 'Realtime đang tắt trong CAI_DAT.' };
     }
@@ -1392,6 +1464,7 @@ function readSettings_() {
     dailySyncTimes: String(map.dailySyncTimes || '08:00,10:00,13:00,15:00,19:00').trim(),
     realtimeDatabaseUrl: String(map.realtimeDatabaseUrl || CONFIG.RTDB_URL).trim() || CONFIG.RTDB_URL,
     realtimeMirrorEnabled: map.realtimeMirrorEnabled !== '0',
+    serverRealtimeMirrorEnabled: map.serverRealtimeMirrorEnabled === '1',
     serviceAccountEmail: String(map.serviceAccountEmail || '').trim(),
     serviceAccountPrivateKey: String(map.serviceAccountPrivateKey || '').trim(),
     sourceEmail: String(map.sourceEmail || CONFIG.ACB_FROM).trim() || CONFIG.ACB_FROM,

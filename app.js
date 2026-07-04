@@ -40,6 +40,7 @@ provider.setCustomParameters({ prompt: "select_account" });
 
 const SESSION_MS = 30 * 24 * 60 * 60 * 1000;
 const STAFF_AMOUNT_LIMIT = 2_000_000;
+const SYNC_ALL_DAYS = 3650;
 
 const state = {
   mode: "exact",
@@ -232,7 +233,7 @@ elements.statsLoadBtn.addEventListener("click", loadStats);
   });
 });
 elements.syncTodayBtn.addEventListener("click", () => syncGmail(1));
-elements.sync10DaysBtn.addEventListener("click", () => syncGmail(10));
+elements.sync10DaysBtn.addEventListener("click", () => syncGmail("all"));
 elements.chooseEmployeeBtn.addEventListener("click", openEmployeeDialog);
 elements.permissionsBtn.addEventListener("click", openPermissionsDialog);
 elements.addEmployeeBtn.addEventListener("click", addEmployeeDraft);
@@ -704,13 +705,20 @@ function filterStatsRows(rows) {
   return rows;
 }
 
-async function syncGmail(days) {
+async function syncGmail(scope) {
+  const syncAll = scope === "all";
+  const days = syncAll ? SYNC_ALL_DAYS : Number(scope || 1);
   if (!isAdmin() && days !== 1) return;
-  const label = days === 1 ? "hôm nay" : "10 ngày trước";
+  const label = syncAll ? "tất cả" : "hôm nay";
   setBusy(`Đang cập nhật Gmail ${label}...`);
   try {
     const firebaseIdToken = await getCurrentFirebaseIdToken();
-    const data = await callApi("syncGmail", { days, firebaseIdToken, skipServerMirror: true });
+    const data = await callApi("syncGmail", {
+      days,
+      syncAll,
+      firebaseIdToken,
+      skipServerMirror: true,
+    });
     const realtimeText = await resolveRealtimeMirrorText(data);
     setReady(`Thêm mới ${data.added || 0}, trùng ${data.duplicated || 0}${realtimeText}`);
     showToast(`Đã cập nhật: thêm ${data.added || 0}, trùng ${data.duplicated || 0}${realtimeText}`);
@@ -723,23 +731,14 @@ async function syncGmail(days) {
 }
 
 async function resolveRealtimeMirrorText(data) {
-  const serverMirror = data && data.firebaseMirror;
-  if (serverMirror && serverMirror.disabled) return ", Realtime đang tắt";
-  if (serverMirror && serverMirror.ok) return `, Realtime server ${serverMirror.count || 0} dòng`;
-
   const rows = data && Array.isArray(data.firebaseRows) ? data.firebaseRows : [];
-  if (!rows.length) {
-    return serverMirror && serverMirror.error
-      ? `, Realtime lỗi: ${serverMirror.error}`
-      : ", không có dòng để đẩy Realtime";
-  }
+  if (!rows.length) return ", không có dòng để đẩy Realtime";
 
   try {
     const mirrored = await mirrorRowsToRealtime(rows);
     return `, Realtime web ${mirrored.count} dòng`;
   } catch (error) {
-    const serverText = serverMirror && serverMirror.error ? `${serverMirror.error}; ` : "";
-    return `, Realtime lỗi: ${serverText}${readError(error)}`;
+    return `, Realtime web lỗi: ${readError(error)}`;
   }
 }
 
