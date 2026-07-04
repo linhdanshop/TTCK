@@ -11,7 +11,8 @@ const CONFIG = {
   MAX_SEARCH_ROWS: 500,
   MAX_GMAIL_THREADS: 2000,
   FULL_SYNC_DAYS: 3650,
-  SCHEDULE_CHECK_MINUTES: 5,
+  DEFAULT_DAILY_SYNC_TIMES: '23:59,08:00,12:00',
+  SCHEDULE_CHECK_MINUTES: 1,
   SCHEDULE_WINDOW_MINUTES: 10,
   SESSION_SECONDS: 21600,
   STAFF_AMOUNT_LIMIT: 2000000,
@@ -51,6 +52,8 @@ const HISTORY_HEADERS = ['Thời gian', 'Tháng', 'Người làm', 'Email', 'Hà
 const LOG_HEADERS = ['Thời gian', 'Loại', 'Thêm mới', 'Trùng', 'Bỏ qua', 'Ghi chú'];
 const SETTINGS_HEADERS = ['Khóa', 'Giá trị', 'Cập nhật lúc', 'Người cập nhật', 'Hướng dẫn'];
 const DEBUG_HEADERS = ['Thời gian', 'Gmail ID', 'Lý do', 'Mẫu nội dung'];
+
+const OLD_DEFAULT_DAILY_SYNC_TIMES = '08:00,10:00,13:00,15:00,19:00';
 
 const DEFAULT_SETTINGS = [
   {
@@ -105,8 +108,8 @@ const DEFAULT_SETTINGS = [
   },
   {
     key: 'dailySyncTimes',
-    value: '08:00,10:00,13:00,15:00,19:00',
-    note: 'Các khung giờ Apps Script tự lấy Gmail mỗi ngày. setupTTCK() tạo một trigger kiểm tra mỗi 5 phút; sau đó có thể đổi giờ ngay trong sheet.'
+    value: CONFIG.DEFAULT_DAILY_SYNC_TIMES,
+    note: 'Các mốc Apps Script tự lấy Gmail mỗi ngày, cách nhau bằng dấu phẩy. Mặc định 23:59,08:00,12:00; mỗi mốc chỉ chạy 1 lần/ngày. Chạy setupTTCK() một lần sau khi cập nhật code hoặc nếu trigger bị mất.'
   },
   {
     key: 'realtimeDatabaseUrl',
@@ -704,16 +707,17 @@ function runScheduledSyncDispatcher_() {
     const times = getDailySyncTimes_(settings);
     const now = new Date();
     const today = Utilities.formatDate(now, CONFIG.TZ, 'yyyyMMdd');
+    const yesterday = Utilities.formatDate(new Date(now.getTime() - 24 * 60 * 60 * 1000), CONFIG.TZ, 'yyyyMMdd');
     const currentMinutes = Number(Utilities.formatDate(now, CONFIG.TZ, 'H')) * 60
       + Number(Utilities.formatDate(now, CONFIG.TZ, 'm'));
     const props = PropertiesService.getScriptProperties();
-    cleanupScheduleRunKeys_(props, today);
+    cleanupScheduleRunKeys_(props, today, yesterday);
 
     times.forEach(time => {
-      const targetMinutes = timeToMinutes_(time);
-      if (currentMinutes < targetMinutes || currentMinutes >= targetMinutes + CONFIG.SCHEDULE_WINDOW_MINUTES) return;
+      const due = getScheduleDue_(time, currentMinutes, today, yesterday);
+      if (!due.due) return;
 
-      const runKey = 'ttck_scheduled_sync_' + today + '_' + time.replace(':', '');
+      const runKey = 'ttck_scheduled_sync_' + due.dateKey + '_' + time.replace(':', '');
       if (props.getProperty(runKey)) return;
       props.setProperty(runKey, String(Date.now()));
       try {
@@ -741,7 +745,7 @@ function setupDefaultDailySyncTriggers_() {
 
 function getDailySyncTimes_(settings) {
   const seen = {};
-  return String(settings.dailySyncTimes || '08:00,10:00,13:00,15:00,19:00')
+  return normalizeSyncTimesText_(settings.dailySyncTimes || CONFIG.DEFAULT_DAILY_SYNC_TIMES)
     .split(',')
     .map(item => String(item || '').trim())
     .filter(Boolean)
@@ -753,15 +757,47 @@ function getDailySyncTimes_(settings) {
     });
 }
 
+function normalizeSyncTimesText_(value) {
+  const seen = {};
+  return String(value || '')
+    .split(',')
+    .map(item => String(item || '').trim())
+    .filter(Boolean)
+    .map(item => normalizeTime_(item))
+    .filter(time => {
+      if (seen[time]) return false;
+      seen[time] = true;
+      return true;
+    })
+    .join(',');
+}
+
 function timeToMinutes_(time) {
   const parts = normalizeTime_(time).split(':').map(Number);
   return parts[0] * 60 + parts[1];
 }
 
-function cleanupScheduleRunKeys_(props, today) {
+function getScheduleDue_(time, currentMinutes, today, yesterday) {
+  const targetMinutes = timeToMinutes_(time);
+  let diff = currentMinutes - targetMinutes;
+  let dateKey = today;
+  if (diff < 0) {
+    diff += 24 * 60;
+    dateKey = yesterday;
+  }
+  return {
+    due: diff >= 0 && diff < CONFIG.SCHEDULE_WINDOW_MINUTES,
+    dateKey
+  };
+}
+
+function cleanupScheduleRunKeys_(props, today, yesterday) {
   const all = props.getProperties();
   Object.keys(all).forEach(key => {
-    if (key.indexOf('ttck_scheduled_sync_') === 0 && key.indexOf('ttck_scheduled_sync_' + today + '_') !== 0) {
+    const isScheduleKey = key.indexOf('ttck_scheduled_sync_') === 0;
+    const isToday = key.indexOf('ttck_scheduled_sync_' + today + '_') === 0;
+    const isYesterday = key.indexOf('ttck_scheduled_sync_' + yesterday + '_') === 0;
+    if (isScheduleKey && !isToday && !isYesterday) {
       props.deleteProperty(key);
     }
   });
@@ -1414,6 +1450,7 @@ function ensureDefaultSettings_() {
   const sh = getSheet_(CONFIG.SHEETS.SETTINGS);
   const last = sh.getLastRow();
   const existing = {};
+  let migrated = false;
   if (last > 1) {
     const defaultMap = {};
     DEFAULT_SETTINGS.forEach(item => defaultMap[item.key] = item);
@@ -1422,6 +1459,10 @@ function ensureDefaultSettings_() {
       .forEach((row, index) => {
         const key = String(row[0] || '');
         existing[key] = true;
+        if (key === 'dailySyncTimes' && normalizeSyncTimesText_(row[1]) === OLD_DEFAULT_DAILY_SYNC_TIMES) {
+          sh.getRange(index + 2, 2, 1, 3).setValues([[CONFIG.DEFAULT_DAILY_SYNC_TIMES, new Date(), 'system']]);
+          migrated = true;
+        }
         if (defaultMap[key] && !String(row[4] || '').trim()) {
           sh.getRange(index + 2, 5).setValue(defaultMap[key].note);
         }
@@ -1435,6 +1476,8 @@ function ensureDefaultSettings_() {
 
   if (rows.length) {
     sh.getRange(sh.getLastRow() + 1, 1, rows.length, SETTINGS_HEADERS.length).setValues(rows);
+    CacheService.getScriptCache().remove('ttck_settings_v2');
+  } else if (migrated) {
     CacheService.getScriptCache().remove('ttck_settings_v2');
   }
 }
@@ -1461,7 +1504,7 @@ function readSettings_() {
     autoSyncMinutes: Number(map.autoSyncMinutes || 0),
     dailyAutoEnabled: map.dailyAutoEnabled === '1',
     dailyAutoTime: normalizeTime_(map.dailyAutoTime || '08:00'),
-    dailySyncTimes: String(map.dailySyncTimes || '08:00,10:00,13:00,15:00,19:00').trim(),
+    dailySyncTimes: String(map.dailySyncTimes || CONFIG.DEFAULT_DAILY_SYNC_TIMES).trim(),
     realtimeDatabaseUrl: String(map.realtimeDatabaseUrl || CONFIG.RTDB_URL).trim() || CONFIG.RTDB_URL,
     realtimeMirrorEnabled: map.realtimeMirrorEnabled !== '0',
     serverRealtimeMirrorEnabled: map.serverRealtimeMirrorEnabled === '1',
