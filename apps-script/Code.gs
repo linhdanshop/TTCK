@@ -1017,112 +1017,34 @@ function formatRowForFirebase_(row) {
 }
 
 function mirrorRowsToRealtimeSafely_(rows, options) {
-  try {
-    return mirrorRowsToRealtime_(rows || [], readSettings_(), options || {});
-  } catch (err) {
-    const message = err && err.message ? err.message : String(err);
-    if (message === '__REALTIME_NO_AUTH__') {
-      return {
-        ok: false,
-        skipped: true,
-        count: 0,
-        pathCount: 0,
-        error: 'Realtime chưa có Firebase token hoặc service account.'
-      };
-    }
-    return { ok: false, count: 0, pathCount: 0, error: message };
-  }
+  return {
+    ok: true,
+    skipped: true,
+    disabled: true,
+    webFallback: true,
+    count: 0,
+    pathCount: 0,
+    message: 'Apps Script server mirror đã tắt; web dùng Firebase Auth để ghi Realtime.'
+  };
 }
 
 function mirrorRowsToRealtime_(rows, settings, options) {
-  settings = settings || readSettings_();
-  options = options || {};
-  if (settings.serverRealtimeMirrorEnabled !== true) {
-    return { ok: true, count: 0, pathCount: 0, disabled: true, webFallback: true };
-  }
-  if (settings.realtimeMirrorEnabled === false) {
-    return { ok: true, count: 0, pathCount: 0, disabled: true, webFallback: true };
-  }
-
-  const updates = {};
-  const now = Date.now();
-  let rowCount = 0;
-  const isStaffToken = !!options.firebaseIdToken && options.userRole !== 'admin';
-  const canWriteAdminPaths = !isStaffToken;
-  (rows || []).forEach(row => {
-    if (!row || !row.id) return;
-    const id = firebaseKey_(row.id);
-    const transaction = cleanRealtimeTransaction_(row);
-    if (canWriteAdminPaths) updates['transactionsAdmin/' + id] = transaction;
-    if (Number(row.amount || 0) <= CONFIG.STAFF_AMOUNT_LIMIT) {
-      updates['transactionsStaff/' + id] = transaction;
-    } else if (canWriteAdminPaths) {
-      updates['transactionsStaff/' + id] = null;
-    }
-    const action = cleanRealtimeAction_(row);
-    if (action) updates['actions/' + id] = action;
-    rowCount++;
-  });
-
-  if (canWriteAdminPaths) {
-    updates['meta/lastMirror'] = {
-      at: now,
-      atText: Utilities.formatDate(new Date(now), CONFIG.TZ, 'dd/MM/yyyy HH:mm:ss'),
-      rowCount,
-      source: options.firebaseIdToken ? 'web-id-token' : 'apps-script'
-    };
-  }
-
-  const pathCount = Object.keys(updates).length;
-  if (!pathCount) return { ok: true, count: 0, pathCount: 0 };
-  requestRealtime_('', 'patch', updates, settings, options);
-  return { ok: true, count: rowCount, pathCount };
+  return mirrorRowsToRealtimeSafely_(rows, options);
 }
 
 function testRealtimeConnection_() {
-  try {
-    const settings = readSettings_();
-    if (settings.serverRealtimeMirrorEnabled !== true) {
-      return { ok: true, message: 'Realtime server mirror đang tắt; web sẽ tự đẩy Realtime để tránh lỗi 401.' };
-    }
-    if (settings.realtimeMirrorEnabled === false) {
-      return { ok: true, message: 'Realtime đang tắt trong CAI_DAT.' };
-    }
-    const now = Date.now();
-    requestRealtime_('meta/lastSetup', 'put', {
-      at: now,
-      atText: Utilities.formatDate(new Date(now), CONFIG.TZ, 'dd/MM/yyyy HH:mm:ss'),
-      source: 'setupTTCK'
-    }, settings, {});
-    return { ok: true, message: 'Realtime đã kết nối.' };
-  } catch (err) {
-    const message = err && err.message ? err.message : String(err);
-    if (message === '__REALTIME_NO_AUTH__') {
-      return { ok: true, message: 'Realtime sẽ ghi khi web gửi Firebase token. Trigger tự động cần service account trong CAI_DAT.' };
-    }
-    return { ok: false, message: 'Realtime chưa ghi được: ' + message };
-  }
+  return {
+    ok: true,
+    skipped: true,
+    message: 'Realtime server mirror đã tắt; web dùng Firebase Auth để ghi Realtime.'
+  };
 }
 
 function requestRealtime_(path, method, payload, settings, options) {
-  const baseUrl = getRealtimeBaseUrl_(settings);
-  if (!baseUrl) throw new Error('Chưa cấu hình realtimeDatabaseUrl trong CAI_DAT.');
-  const cleanPath = String(path || '').replace(/^\/+/, '').replace(/\/+$/, '');
-  const auth = getRealtimeAuth_(settings, options || {});
-  if (!auth || !auth.token) throw new Error('__REALTIME_NO_AUTH__');
-  const queryParam = auth.type === 'firebase' ? 'auth' : 'access_token';
-  const url = baseUrl + '/' + (cleanPath ? cleanPath + '.json' : '.json') + '?' + queryParam + '=' + encodeURIComponent(auth.token);
-  const response = UrlFetchApp.fetch(url, {
-    method: String(method || 'patch').toLowerCase(),
-    contentType: 'application/json',
-    muteHttpExceptions: true,
-    payload: JSON.stringify(payload)
-  });
-  const code = response.getResponseCode();
-  if (code < 200 || code >= 300) {
-    throw new Error('Không ghi được Realtime (' + code + '): ' + response.getContentText().slice(0, 300));
-  }
-  return response;
+  return {
+    getResponseCode: function() { return 204; },
+    getContentText: function() { return '{"skipped":true,"reason":"serverRealtimeMirrorDisabled"}'; }
+  };
 }
 
 function getRealtimeBaseUrl_(settings) {
@@ -1502,7 +1424,7 @@ function readSettings_() {
     dailySyncTimes: String(map.dailySyncTimes || CONFIG.DEFAULT_DAILY_SYNC_TIMES).trim(),
     realtimeDatabaseUrl: String(map.realtimeDatabaseUrl || CONFIG.RTDB_URL).trim() || CONFIG.RTDB_URL,
     realtimeMirrorEnabled: map.realtimeMirrorEnabled !== '0',
-    serverRealtimeMirrorEnabled: map.serverRealtimeMirrorEnabled === '1',
+    serverRealtimeMirrorEnabled: false,
     serviceAccountEmail: String(map.serviceAccountEmail || '').trim(),
     serviceAccountPrivateKey: String(map.serviceAccountPrivateKey || '').trim(),
     sourceEmail: String(map.sourceEmail || CONFIG.ACB_FROM).trim() || CONFIG.ACB_FROM,
