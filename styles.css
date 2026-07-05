@@ -539,6 +539,43 @@ p {
   font-size: 14px;
 }
 
+.deploy-login-box,
+.deploy-settings-box {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+
+.deploy-login-box label,
+.deploy-settings-box label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.deploy-login-box input,
+.deploy-settings-box input {
+  width: 100%;
+  min-height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0 10px;
+  background: #fff;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.deploy-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .stats-toolbar {
   min-height: 54px;
   display: flex;

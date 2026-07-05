@@ -58,6 +58,11 @@ const OLD_DEFAULT_DAILY_SYNC_TIMES = '08:00,10:00,13:00,15:00,19:00';
 
 const DEFAULT_SETTINGS = [
   {
+    key: 'appsScriptUrl',
+    value: 'https://script.google.com/macros/s/AKfycbyTY0N44s41DNl2E0KGHvpn5JM3c25a7g0dDYxopHS86HIzu9ZnY0a7WIycVFIiMjgx/exec',
+    note: 'Link Deploy Web App Apps Script dang dung. Neu tao deployment moi thi dan URL /exec moi vao day va tren web.'
+  },
+  {
     key: 'sourceEmail',
     value: CONFIG.ACB_FROM,
     note: 'Email gửi thông báo chuyển khoản. Đổi cột Giá trị nếu Gmail nhận từ nguồn khác.'
@@ -271,6 +276,11 @@ function route_(action, payload, idToken, session) {
     case 'setDailyAuto':
       requireAdmin_(user);
       data = setDailyAuto_(payload, user.email);
+      break;
+
+    case 'setDeployUrl':
+      requireAdmin_(user);
+      data = setDeployUrl_(payload.url, user.email);
       break;
 
     default:
@@ -899,6 +909,23 @@ function setDailyAuto_(payload, actorEmail) {
   settings.dailyAutoEnabled = enabled;
   settings.dailyAutoTime = time;
   return { settings, message };
+}
+
+function setDeployUrl_(url, actorEmail) {
+  const cleanUrl = normalizeAppsScriptExecUrl_(url);
+  updateSetting_('appsScriptUrl', cleanUrl, actorEmail);
+  const message = 'Đã lưu link Deploy Apps Script.';
+  writeSimpleHistory_({ name: 'Admin', email: actorEmail || '' }, 'Cài link Deploy', cleanUrl);
+  const settings = readSettings_();
+  settings.appsScriptUrl = cleanUrl;
+  return { settings, message };
+}
+
+function normalizeAppsScriptExecUrl_(value) {
+  const text = String(value || '').trim();
+  const match = text.match(/^https:\/\/script\.google\.com\/macros\/s\/[^/?#]+\/exec/i);
+  if (!match) throw new Error('Link Deploy phải có dạng https://script.google.com/macros/s/.../exec');
+  return match[0];
 }
 
 function isUserAllowedToWrite_(user) {
@@ -1538,6 +1565,7 @@ function readSettings_() {
     }
   });
   const settings = {
+    appsScriptUrl: String(map.appsScriptUrl || '').trim(),
     autoSyncMinutes: Number(map.autoSyncMinutes || 0),
     dailyAutoEnabled: map.dailyAutoEnabled === '1',
     dailyAutoTime: normalizeTime_(map.dailyAutoTime || '08:00'),

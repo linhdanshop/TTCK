@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta http-equiv="Cache-Control" content="no-store" />
     <title>Tra cứu chuyển khoản</title>
-    <link rel="stylesheet" href="./styles.css?v=rtdb-20260702-01" />
+    <link rel="stylesheet" href="./styles.css?v=rtdb-20260705-04" />
   </head>
   <body>
     <div id="app">
@@ -19,6 +19,14 @@
             <i data-lucide="mail"></i>
             Đăng nhập Gmail
           </button>
+          <div class="deploy-login-box">
+            <label>
+              Link Deploy Apps Script
+              <input id="loginDeployUrlInput" type="url" autocomplete="off" placeholder="https://script.google.com/macros/s/.../exec" />
+            </label>
+            <button id="loginSaveDeployUrlBtn" class="soft-btn" type="button">Lưu link</button>
+            <p id="loginDeployStatus" class="auto-status"></p>
+          </div>
           <p id="loginMessage" class="message-line"></p>
         </div>
       </section>
@@ -180,6 +188,17 @@
           <h2>Cài auto cập nhật</h2>
           <button class="soft-btn" value="close" type="submit">Đóng</button>
         </div>
+        <div class="deploy-settings-box">
+          <label>
+            Link Deploy Apps Script
+            <input id="deployUrlInput" type="url" autocomplete="off" placeholder="https://script.google.com/macros/s/.../exec" />
+          </label>
+          <div class="deploy-actions">
+            <button id="testDeployUrlBtn" class="soft-btn" type="button">Kiểm tra</button>
+            <button id="saveDeployUrlBtn" class="success-btn" type="button">Lưu link Deploy</button>
+          </div>
+          <p id="deployUrlStatus" class="auto-status"></p>
+        </div>
         <div class="auto-minutes-box">
           <label class="auto-time">
             Auto cập nhật mỗi
@@ -281,6 +300,6 @@
     <div id="toast" class="toast hidden"></div>
 
     <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
-    <script type="module" src="./app.js?v=rtdb-20260704-02"></script>
+    <script type="module" src="./app.js?v=rtdb-20260705-04"></script>
   </body>
 </html>

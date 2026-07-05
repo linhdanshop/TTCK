@@ -28,9 +28,9 @@ const firebaseConfig = {
   appId: "1:882092560518:web:c6ff98db205ab578cb4107",
 };
 
-// Dán URL Web App Apps Script sau khi deploy.
-// Ví dụ: https://script.google.com/macros/s/AKfycb.../exec
-const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyTY0N44s41DNl2E0KGHvpn5JM3c25a7g0dDYxopHS86HIzu9ZnY0a7WIycVFIiMjgx/exec";
+// URL mặc định. Admin có thể đổi trên web hoặc trong CAI_DAT: appsScriptUrl.
+const DEFAULT_APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyTY0N44s41DNl2E0KGHvpn5JM3c25a7g0dDYxopHS86HIzu9ZnY0a7WIycVFIiMjgx/exec";
+const APPS_SCRIPT_URL_STORAGE_KEY = "ttckAppsScriptUrl";
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
@@ -67,6 +67,9 @@ const elements = {
   mainScreen: $("mainScreen"),
   loginBtn: $("loginBtn"),
   loginMessage: $("loginMessage"),
+  loginDeployUrlInput: $("loginDeployUrlInput"),
+  loginSaveDeployUrlBtn: $("loginSaveDeployUrlBtn"),
+  loginDeployStatus: $("loginDeployStatus"),
   logoutBtn: $("logoutBtn"),
   userBadge: $("userBadge"),
   syncStatus: $("syncStatus"),
@@ -114,6 +117,10 @@ const elements = {
   dailyAutoTime: $("dailyAutoTime"),
   saveDailyAutoBtn: $("saveDailyAutoBtn"),
   dailyAutoStatus: $("dailyAutoStatus"),
+  deployUrlInput: $("deployUrlInput"),
+  saveDeployUrlBtn: $("saveDeployUrlBtn"),
+  testDeployUrlBtn: $("testDeployUrlBtn"),
+  deployUrlStatus: $("deployUrlStatus"),
   toast: $("toast"),
 };
 
@@ -143,6 +150,7 @@ onAuthStateChanged(auth, async (user) => {
     state.profile = data.profile;
     state.employees = data.employees || [];
     state.settings = data.settings || {};
+    applySettingsApiUrl();
     setupDefaultDates();
     renderShell();
     showMain();
@@ -171,6 +179,7 @@ elements.loginBtn.addEventListener("click", async () => {
     elements.loginBtn.disabled = false;
   }
 });
+elements.loginSaveDeployUrlBtn.addEventListener("click", saveLoginDeployUrl);
 
 elements.logoutBtn.addEventListener("click", async () => {
   resetFilters();
@@ -245,6 +254,8 @@ elements.deleteHistoryBtn.addEventListener("click", deleteHistoryMonth);
 elements.autoSyncBtn.addEventListener("click", openAutoSyncDialog);
 elements.saveAutoMinutesBtn.addEventListener("click", saveAutoMinutes);
 elements.saveDailyAutoBtn.addEventListener("click", saveDailyAuto);
+elements.saveDeployUrlBtn.addEventListener("click", saveDeployUrl);
+elements.testDeployUrlBtn.addEventListener("click", testDeployUrl);
 elements.dailyAutoEnabled.addEventListener("change", updateDailyAutoStatusFromInputs);
 elements.dailyAutoTime.addEventListener("input", updateDailyAutoStatusFromInputs);
 elements.dailyAutoTime.addEventListener("change", updateDailyAutoStatusFromInputs);
@@ -253,6 +264,7 @@ function showLogin(message = "") {
   elements.mainScreen.classList.add("hidden");
   elements.loginScreen.classList.remove("hidden");
   elements.loginMessage.textContent = message;
+  renderLoginDeployControls();
   refreshIcons();
 }
 
@@ -944,8 +956,21 @@ async function deleteHistoryMonth() {
 
 function openAutoSyncDialog() {
   if (!isAdmin()) return;
+  renderDeployControls();
   renderDailyAutoControls();
   elements.autoSyncDialog.showModal();
+}
+
+function renderLoginDeployControls(statusText = "") {
+  const url = getActiveApiUrl();
+  elements.loginDeployUrlInput.value = url;
+  elements.loginDeployStatus.textContent = statusText || `Đang dùng: ${shortUrl(url)}`;
+}
+
+function renderDeployControls(statusText = "") {
+  const url = getActiveApiUrl();
+  elements.deployUrlInput.value = url;
+  elements.deployUrlStatus.textContent = statusText || `Đang dùng: ${shortUrl(url)}`;
 }
 
 function renderDailyAutoControls() {
@@ -965,6 +990,62 @@ function updateDailyAutoStatusFromInputs(prefix = "Đang bật") {
   elements.dailyAutoStatus.textContent = elements.dailyAutoEnabled.checked
     ? `${prefix}: mỗi ngày lúc ${time} nếu web admin đang mở.`
     : "Đang tắt auto ngày.";
+}
+
+async function saveLoginDeployUrl() {
+  try {
+    const url = normalizeAppsScriptUrl(elements.loginDeployUrlInput.value);
+    elements.loginSaveDeployUrlBtn.disabled = true;
+    elements.loginDeployStatus.textContent = "Đang kiểm tra link...";
+    const pong = await pingAppsScriptUrl(url);
+    localStorage.setItem(APPS_SCRIPT_URL_STORAGE_KEY, url);
+    state.settings = { ...(state.settings || {}), appsScriptUrl: url };
+    renderLoginDeployControls(`Đã lưu trên máy này. Version: ${pong.version || "không rõ"}`);
+  } catch (error) {
+    elements.loginDeployStatus.textContent = readError(error);
+  } finally {
+    elements.loginSaveDeployUrlBtn.disabled = false;
+  }
+}
+
+async function testDeployUrl() {
+  if (!isAdmin()) return;
+  const url = elements.deployUrlInput.value;
+  elements.testDeployUrlBtn.disabled = true;
+  elements.deployUrlStatus.textContent = "Đang kiểm tra link Deploy...";
+  try {
+    const pong = await pingAppsScriptUrl(url);
+    elements.deployUrlStatus.textContent = `Kết nối OK. Version: ${pong.version || "không rõ"}`;
+    showToast("Link Deploy dùng được");
+  } catch (error) {
+    elements.deployUrlStatus.textContent = readError(error);
+    showToast(readError(error));
+  } finally {
+    elements.testDeployUrlBtn.disabled = false;
+  }
+}
+
+async function saveDeployUrl() {
+  if (!isAdmin()) return;
+  const url = normalizeAppsScriptUrl(elements.deployUrlInput.value);
+  const before = { ...(state.settings || {}) };
+  elements.saveDeployUrlBtn.disabled = true;
+  elements.deployUrlStatus.textContent = "Đang kiểm tra và lưu link Deploy...";
+  try {
+    const pong = await pingAppsScriptUrl(url);
+    localStorage.setItem(APPS_SCRIPT_URL_STORAGE_KEY, url);
+    state.settings = { ...before, appsScriptUrl: url };
+    const data = await callApi("setDeployUrl", { url }, true);
+    state.settings = { ...(state.settings || {}), ...(data.settings || {}), appsScriptUrl: url };
+    renderDeployControls(`Đã lưu CAI_DAT. Version: ${pong.version || "không rõ"}`);
+    showToast(data.message || "Đã lưu link Deploy Apps Script");
+  } catch (error) {
+    state.settings = before;
+    renderDeployControls(readError(error));
+    showToast(readError(error));
+  } finally {
+    elements.saveDeployUrlBtn.disabled = false;
+  }
 }
 
 async function saveAutoMinutes() {
@@ -1188,8 +1269,8 @@ function jsonpRequest(params, timeoutMs = 90000) {
   });
 }
 
-function buildApiUrl(params, callback) {
-  const url = new URL(APPS_SCRIPT_URL);
+function buildApiUrl(params, callback, baseUrl = getActiveApiUrl()) {
+  const url = new URL(baseUrl);
   url.searchParams.set("callback", callback);
   url.searchParams.set("action", params.action);
   url.searchParams.set("payload", JSON.stringify(params.payload || {}));
@@ -1208,9 +1289,70 @@ function parseJsonpEnvelope(text, callback) {
 }
 
 function ensureApiUrl() {
-  if (!APPS_SCRIPT_URL || APPS_SCRIPT_URL.includes("PASTE_APPS_SCRIPT")) {
-    throw new Error("Chưa cấu hình Apps Script Web App URL trong app.js.");
+  const url = getActiveApiUrl();
+  if (!url || url.includes("PASTE_APPS_SCRIPT")) {
+    throw new Error("Chưa cấu hình Apps Script Web App URL.");
   }
+}
+
+function getActiveApiUrl() {
+  const localUrl = localStorage.getItem(APPS_SCRIPT_URL_STORAGE_KEY) || "";
+  const localClean = normalizeAppsScriptUrl(localUrl, false);
+  if (localUrl && !localClean) localStorage.removeItem(APPS_SCRIPT_URL_STORAGE_KEY);
+  return localClean
+    || normalizeAppsScriptUrl(state.settings.appsScriptUrl || "", false)
+    || normalizeAppsScriptUrl(DEFAULT_APPS_SCRIPT_URL, false);
+}
+
+function applySettingsApiUrl() {
+  if (localStorage.getItem(APPS_SCRIPT_URL_STORAGE_KEY)) return;
+  const url = normalizeAppsScriptUrl(state.settings.appsScriptUrl || "", false);
+  if (url) state.settings.appsScriptUrl = url;
+}
+
+function normalizeAppsScriptUrl(value, throwOnInvalid = true) {
+  const text = String(value || "").trim();
+  const match = text.match(/^https:\/\/script\.google\.com\/macros\/s\/[^/?#]+\/exec/i);
+  if (match) return match[0];
+  if (!throwOnInvalid) return "";
+  throw new Error("Link Deploy phải có dạng https://script.google.com/macros/s/.../exec");
+}
+
+async function pingAppsScriptUrl(url) {
+  const cleanUrl = normalizeAppsScriptUrl(url);
+  const result = await apiRequestWithUrl(cleanUrl, { action: "ping", payload: {} });
+  if (!result || result.ok === false) throw new Error((result && result.error) || "Link Deploy không phản hồi OK.");
+  return result;
+}
+
+async function apiRequestWithUrl(baseUrl, params) {
+  const callback = `__ttck_ping_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  return jsonpRequestWithUrl(baseUrl, params, callback, 30000);
+}
+
+function jsonpRequestWithUrl(baseUrl, params, callback, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const url = buildApiUrl(params, callback, baseUrl);
+    const script = document.createElement("script");
+    const timer = setTimeout(() => cleanup(() => reject(new Error("Apps Script phản hồi quá lâu."))), timeoutMs);
+
+    window[callback] = (data) => cleanup(() => resolve(data));
+    script.onerror = () => cleanup(() => reject(new Error("Không gọi được Apps Script Web App.")));
+    script.src = url.toString();
+    document.head.appendChild(script);
+
+    function cleanup(done) {
+      clearTimeout(timer);
+      delete window[callback];
+      script.remove();
+      done();
+    }
+  });
+}
+
+function shortUrl(url) {
+  const text = String(url || "");
+  return text.length > 72 ? `${text.slice(0, 48)}...${text.slice(-18)}` : text;
 }
 
 async function getCurrentFirebaseIdToken(force = false) {
