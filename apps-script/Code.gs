@@ -41,6 +41,7 @@ const CONFIG = {
   ]
 };
 
+const APP_VERSION = '20260705-dedupe-no-rtdb-log';
 const DATA_HEADERS = [
   'ID', 'Ngày', 'Giờ', 'Ngày giờ', 'Loại', 'Số tiền', 'Nội dung CK', 'Mã GD',
   'Gmail Message ID', 'Đã chọn', 'Ghi chú', 'Thao tác', 'Thời gian thao tác',
@@ -150,6 +151,13 @@ function setupTTCK() {
   return 'Đã tạo/cập nhật sheet TTCK, CAI_DAT và trigger tự cập nhật Gmail. ' + realtime.message;
 }
 
+function cleanupTTCKDuplicates() {
+  ensureAll_();
+  const result = cleanupDuplicateDataRows_();
+  writeSyncLog_('Dọn trùng', 0, result.removed || 0, 0, 'Giữ dòng đã tích/ghi chú, xóa dòng trống trùng giao dịch');
+  return 'Đã xóa ' + (result.removed || 0) + ' dòng trùng trong DATA_CK.';
+}
+
 function doGet(e) {
   const callback = String((e.parameter && e.parameter.callback) || '').trim();
   const safeCallback = /^[A-Za-z_$][0-9A-Za-z_$]*(?:\.[A-Za-z_$][0-9A-Za-z_$]*)*$/.test(callback)
@@ -159,10 +167,14 @@ function doGet(e) {
   let response;
   try {
     const action = String((e.parameter && e.parameter.action) || '').trim();
+    if (action === 'version') {
+      response = { ok: true, version: APP_VERSION, at: new Date().toISOString() };
+    } else {
     const payload = parseJson_((e.parameter && e.parameter.payload) || '{}');
     const idToken = String((e.parameter && e.parameter.idToken) || '').trim();
     const session = String((e.parameter && e.parameter.session) || '').trim();
     response = route_(action, payload, idToken, session);
+    }
   } catch (err) {
     response = err && err.message === '__NEED_TOKEN__'
       ? { ok: false, needToken: true, error: 'Cần làm mới phiên đăng nhập.' }
@@ -238,6 +250,12 @@ function route_(action, payload, idToken, session) {
         syncMonth,
         skipServerMirror: payload && payload.skipServerMirror === true
       });
+      break;
+
+    case 'cleanupDuplicates':
+      requireAdmin_(user);
+      data = cleanupDuplicateDataRows_();
+      writeSyncLog_('Dọn trùng', 0, data.removed || 0, 0, user.email);
       break;
 
     case 'setAutoSync':
@@ -369,7 +387,7 @@ function fillMissingDataIds_() {
   let changed = false;
   values.forEach(row => {
     if (!row[0]) {
-      row[0] = buildId_(String(row[7] || ''), String(row[8] || ''), row[3], row[5]);
+      row[0] = buildId_(String(row[7] || ''), String(row[8] || ''), row[3], row[5], row[6]);
       changed = true;
     }
   });
@@ -620,6 +638,20 @@ function deleteHistoryMonth_(monthInput) {
 
 function syncGmailByDays_(days, actorEmail, realtimeOptions) {
   realtimeOptions = realtimeOptions || {};
+  if (realtimeOptions.lockHeld === true) {
+    return syncGmailByDaysLocked_(days, actorEmail, realtimeOptions);
+  }
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    return syncGmailByDaysLocked_(days, actorEmail, realtimeOptions);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function syncGmailByDaysLocked_(days, actorEmail, realtimeOptions) {
+  realtimeOptions = realtimeOptions || {};
   const syncAll = realtimeOptions.syncAll === true;
   const syncMonth = realtimeOptions.syncMonth === true;
   days = syncAll
@@ -632,7 +664,11 @@ function syncGmailByDays_(days, actorEmail, realtimeOptions) {
   const settings = readSettings_();
   const query = buildGmailSearchQuery_(settings, queryDays);
   const existing = {};
-  readDataRows_().forEach(row => existing[row.id] = true);
+  readDataRows_().forEach(row => {
+    existing[row.id] = true;
+    const key = canonicalDataKey_(row);
+    if (key) existing[key] = true;
+  });
 
   let added = 0;
   let duplicated = 0;
@@ -657,12 +693,14 @@ function syncGmailByDays_(days, actorEmail, realtimeOptions) {
           return;
         }
         tx.gmailMessageId = msg.getId();
-        tx.id = buildId_(tx.transactionCode, tx.gmailMessageId, tx.timestamp, tx.amount);
-        if (existing[tx.id]) {
+        tx.id = buildId_(tx.transactionCode, tx.gmailMessageId, tx.timestamp, tx.amount, tx.content);
+        const txKey = canonicalDataKey_(tx);
+        if (existing[tx.id] || (txKey && existing[txKey])) {
           duplicated++;
           return;
         }
         existing[tx.id] = true;
+        if (txKey) existing[txKey] = true;
         added++;
         newRows.push(transactionToSheetRow_(tx));
       });
@@ -674,6 +712,8 @@ function syncGmailByDays_(days, actorEmail, realtimeOptions) {
     sh.getRange(sh.getLastRow() + 1, 1, newRows.length, DATA_HEADERS.length).setValues(newRows);
     sortDataSheet_();
   }
+  const cleanup = cleanupDuplicateDataRows_();
+  if (cleanup.removed) duplicated += cleanup.removed;
   if (debugRows.length) appendRows_(getSheet_(CONFIG.SHEETS.DEBUG), debugRows);
   writeSyncLog_(syncLabel, added, duplicated, skipped, actorEmail || '');
   const autoActor = actorEmail === 'auto' || String(actorEmail || '').indexOf('schedule') === 0;
@@ -722,7 +762,7 @@ function runScheduledSyncDispatcher_() {
       if (props.getProperty(runKey)) return;
       props.setProperty(runKey, String(Date.now()));
       try {
-        syncGmailByDays_(1, 'schedule ' + time, { skipServerMirror: true, scheduledTime: time });
+        syncGmailByDays_(1, 'schedule ' + time, { skipServerMirror: true, scheduledTime: time, lockHeld: true });
       } catch (err) {
         props.deleteProperty(runKey);
         writeSyncLog_('Lỗi lịch ' + time, 0, 0, 0, err && err.message ? err.message : String(err));
@@ -1274,7 +1314,7 @@ function buildTxInfo_(transactionCode, ddmmyy, time, fallbackDate) {
 
 function transactionToSheetRow_(tx) {
   const ts = new Date(Number(tx.timestamp || Date.now()));
-  const id = tx.id || buildId_(tx.transactionCode, tx.gmailMessageId, tx.timestamp, tx.amount);
+  const id = tx.id || buildId_(tx.transactionCode, tx.gmailMessageId, tx.timestamp, tx.amount, tx.content);
   return [
     id,
     ts,
@@ -1299,6 +1339,80 @@ function sortDataSheet_() {
   if (sh.getLastRow() <= 2) return;
   sh.getRange(2, 1, sh.getLastRow() - 1, DATA_HEADERS.length)
     .sort({ column: 4, ascending: false });
+}
+
+function cleanupDuplicateDataRows_() {
+  const sh = getSheet_(CONFIG.SHEETS.DATA);
+  const last = sh.getLastRow();
+  if (last <= 2) return { removed: 0 };
+
+  const values = sh.getRange(2, 1, last - 1, DATA_HEADERS.length).getValues();
+  const groups = {};
+  values.forEach((row, index) => {
+    const obj = sheetRowToObject_(row, index + 2);
+    const key = canonicalDataKey_(obj);
+    if (!key) return;
+    if (!groups[key]) groups[key] = [];
+    groups[key].push({ rowNumber: index + 2, values: row, object: obj });
+  });
+
+  const rowsToDelete = [];
+  Object.keys(groups).forEach(key => {
+    const items = groups[key];
+    if (items.length <= 1) return;
+    const keeper = chooseDuplicateKeeper_(items);
+    const merged = mergeDuplicateRows_(keeper, items);
+    sh.getRange(keeper.rowNumber, 1, 1, DATA_HEADERS.length).setValues([merged]);
+    items.forEach(item => {
+      if (item.rowNumber !== keeper.rowNumber) rowsToDelete.push(item.rowNumber);
+    });
+  });
+
+  rowsToDelete
+    .sort((a, b) => b - a)
+    .forEach(rowNumber => sh.deleteRow(rowNumber));
+
+  if (rowsToDelete.length) sortDataSheet_();
+  return { removed: rowsToDelete.length };
+}
+
+function chooseDuplicateKeeper_(items) {
+  return items.slice().sort((a, b) => duplicateRowScore_(b.object) - duplicateRowScore_(a.object))[0];
+}
+
+function duplicateRowScore_(row) {
+  const actionTime = row.actionAt ? row.actionAt.getTime() : 0;
+  const createdTime = row.createdAt ? row.createdAt.getTime() : 0;
+  return (row.checked ? 1000000000000000 : 0)
+    + (row.note ? 500000000000000 : 0)
+    + (row.actorName ? 200000000000000 : 0)
+    + Math.max(actionTime, createdTime, Number(row.timestamp || 0));
+}
+
+function mergeDuplicateRows_(keeper, items) {
+  const merged = keeper.values.slice();
+  const checkedItem = items
+    .filter(item => item.object.checked)
+    .sort((a, b) => duplicateRowScore_(b.object) - duplicateRowScore_(a.object))[0];
+  const noteItem = items
+    .filter(item => item.object.note)
+    .sort((a, b) => duplicateRowScore_(b.object) - duplicateRowScore_(a.object))[0];
+  const actorItem = items
+    .filter(item => item.object.actorName || item.object.actionAt || item.object.actorEmail)
+    .sort((a, b) => duplicateRowScore_(b.object) - duplicateRowScore_(a.object))[0];
+  const createdItems = items
+    .filter(item => item.object.createdAt)
+    .sort((a, b) => a.object.createdAt.getTime() - b.object.createdAt.getTime());
+
+  merged[9] = !!checkedItem;
+  if (noteItem) merged[10] = noteItem.values[10] || '';
+  if (actorItem) {
+    merged[11] = actorItem.values[11] || '';
+    merged[12] = actorItem.values[12] || '';
+    merged[14] = actorItem.values[14] || '';
+  }
+  if (createdItems.length) merged[13] = createdItems[0].values[13] || merged[13];
+  return merged;
 }
 
 function writeHistory_(actor, tx, actionText, detail, before, after) {
@@ -1341,6 +1455,7 @@ function historySnapshot_(row) {
 }
 
 function writeSyncLog_(type, added, duplicated, skipped, note) {
+  if (foldText_(type) === 'realtime loi') return;
   getSheet_(CONFIG.SHEETS.LOG).appendRow([new Date(), type, added, duplicated, skipped, note || '']);
 }
 
@@ -1495,9 +1610,34 @@ function currentMonthSyncDays_() {
   return Math.max(1, now.getDate());
 }
 
-function buildId_(transactionCode, messageId, timestamp, amount) {
+function canonicalDataKey_(row) {
+  if (!row) return '';
+  const transactionCode = String(row.transactionCode || '').trim();
+  if (transactionCode) return 'code:' + safeKey_(transactionCode);
+  const timestamp = Number(row.timestamp || 0);
+  const amount = Number(row.amount || 0);
+  const content = normalizeDuplicateContent_(row.content || '');
+  if (!timestamp || !amount || !content) {
+    const id = String(row.id || '').trim();
+    return id ? 'id:' + safeKey_(id) : '';
+  }
+  return 'tx:' + safeKey_([timestamp, amount, content].join('|'));
+}
+
+function normalizeDuplicateContent_(content) {
+  return foldText_(String(content || ''))
+    .replace(/\*/g, ' ')
+    .replace(/\b(gd|ma gd|ct tu|toi|tai acb|nhtmcp a chau acb)\b/g, ' ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 220);
+}
+
+function buildId_(transactionCode, messageId, timestamp, amount, content) {
   if (transactionCode) return safeKey_(transactionCode);
-  const raw = [messageId || '', timestamp || '', amount || ''].join('|');
+  const duplicateKey = canonicalDataKey_({ transactionCode, timestamp, amount, content });
+  const raw = duplicateKey || [messageId || '', timestamp || '', amount || ''].join('|');
   return safeKey_(raw || Utilities.getUuid());
 }
 
