@@ -167,8 +167,13 @@ function doGet(e) {
   let response;
   try {
     const action = String((e.parameter && e.parameter.action) || '').trim();
-    if (action === 'version') {
-      response = { ok: true, version: APP_VERSION, at: new Date().toISOString() };
+    if (!action || action === 'version' || action === 'ping') {
+      response = {
+        ok: true,
+        version: APP_VERSION,
+        at: new Date().toISOString(),
+        message: 'TTCK Apps Script đang chạy. Web sẽ gửi token khi cần thao tác dữ liệu.'
+      };
     } else {
     const payload = parseJson_((e.parameter && e.parameter.payload) || '{}');
     const idToken = String((e.parameter && e.parameter.idToken) || '').trim();
