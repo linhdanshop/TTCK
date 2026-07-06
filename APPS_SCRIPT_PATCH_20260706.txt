@@ -1,0 +1,31 @@
+TTCK Apps Script patch - 2026-07-06
+
+Root cause 1:
+LOG_SYNC showed checkedMessages=0 with query:
+from:mailalert@acb.com.vn newer_than:10d
+This means Gmail search found zero messages before parser/DATA_CK. The Apps Script query must not lock to mailalert only.
+
+Fix 1:
+- Add buildGmailSearchQueries_(settings, queryDays)
+- syncGmailByDaysLocked_ must run both:
+  1) from configured sourceEmail + newer_than
+  2) fallback newer_than only
+- Deduplicate by Gmail message ID.
+
+Root cause 2:
+ACB content has: 050726-20:24:37
+MB screenshot shows: 21:24 - 05/07/2026
+The parsed transaction time needs +1 hour.
+
+Fix 2:
+- Add CAI_DAT setting: transactionHourOffset = 1
+- Pass settings into buildTxInfo_()
+- In buildTxInfo_(), after creating Date from DDMMYY-HH:mm:ss, apply:
+  d.setHours(d.getHours() + getTransactionHourOffset_(settings));
+- Store tx.time from the adjusted Date, not from raw content.
+
+Version to confirm after deploy:
+20260706-gmail-query-fallback-time-offset
+
+Important:
+GitHub Pages repo stores the web UI only. The running Gmail sync code is in the Google Apps Script project behind the /exec URL. Updating this repo alone does not update that Apps Script project unless clasp or Apps Script API deployment is configured.
