@@ -1,28 +1,32 @@
 TTCK Apps Script patch - 2026-07-06
 
-Current deployed symptoms:
-1. Version 20260706-gmail-query-fallback-time-offset fixed Gmail search fallback.
-2. LOG_SYNC now shows checkedMessages=29, so Gmail is being read.
-3. But parsedOk=0 and parseFail=29, so the parser is failing on the current email format.
-4. Old DATA_CK rows still show raw ACB time, e.g. 050726-20:24:37, because sync only appends new rows and did not migrate old rows.
+Corrected rule:
+DO NOT add +1 hour globally.
+DATA_CK time must come from each Gmail transaction timestamp/content, e.g. 050726-21:54:44 must write 05/07/2026 21:54:44 exactly.
 
-Required deployed version after this patch:
-20260706-parser-fallback-migrate-time
+Current deployed symptoms:
+1. Gmail search fallback works: checkedMessages=29.
+2. Parser still fails: parsedOk=0, parseFail=29.
+3. A previous patch added a global +1 hour offset. That is wrong and must be removed.
+4. Rows already shifted by +1 hour must be repaired from the timestamp inside content.
+
+Required deployed version after this correction:
+20260706-no-offset-repair-content-time
 
 Fixes in apps_script_fixed.txt:
-- matchAmount_ now falls back when CAI_DAT amountRegex does not match.
-- matchAmountFallback_ supports Ghi co, Bao co, Credit, Nhan tien, Tien vao, +100.000 VND, So tien, Amount, Gia tri giao dich.
-- extractContentFallback_ no longer requires exact marker 'Noi dung giao dich'; it can extract content around 'GD <code> ddmmyy-HH:mm:ss'.
-- syncGmailByDaysLocked_ logs fixedTimes.
-- fixExistingTransactionTimes_(settings) scans DATA_CK and corrects existing rows that still equal the raw ACB timestamp.
-- buildTxInfo_ applies transactionHourOffset, default 1.
-- readSettings_ now returns transactionHourOffset.
+- Removed transactionHourOffset from default settings and readSettings_().
+- Removed getTransactionHourOffset_().
+- buildTxInfo_ now stores exactly the date/time found in the transaction content.
+- Replaced fixExistingTransactionTimes_ with repairExistingTimesFromContent_().
+- repairExistingTimesFromContent_ scans DATA_CK and, when content contains ddmmyy-HH:mm:ss, forces columns Ngay/Gio/Ngay gio back to that exact content timestamp.
+- LOG_SYNC now records repairedTimes instead of fixedTimes.
+- Parser fallback remains: matchAmountFallback_ and extractContentFallback_ are still used to handle changed Gmail email formats.
 
 Expected after deploy and Cập nhật 7 ngày:
-- LOG_SYNC: checkedMessages > 0
-- parsedOk should increase if emails are ACB/TTCK format
-- fixedTimes should be > 0 once if old DATA_CK rows need +1 hour
-- Row containing 050726-20:24:37 should display 05/07/2026 21:24:37
+- Version endpoint returns 20260706-no-offset-repair-content-time.
+- Row with content 050726-21:54:44 displays 05/07/2026 21:54:44, not 22:54:44.
+- LOG_SYNC shows repairedTimes > 0 if old rows were shifted wrong.
+- If parsedOk is still 0, inspect DEBUG_ACB latest rows to see exact parser failure reason.
 
 Important:
 GitHub Pages repo stores the web UI only. The running Gmail sync code is in Google Apps Script behind the /exec URL. Updating this repo alone does not update Apps Script unless clasp/Apps Script API deployment is connected.
