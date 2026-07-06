@@ -19,13 +19,10 @@
             <i data-lucide="mail"></i>
             Đăng nhập Gmail
           </button>
-          <div class="deploy-login-box hidden" hidden aria-hidden="true">
-            <label>
-              Link Deploy Apps Script
-              <input id="loginDeployUrlInput" type="url" autocomplete="off" placeholder="https://script.google.com/macros/s/.../exec" />
-            </label>
-            <button id="loginSaveDeployUrlBtn" class="soft-btn" type="button">Lưu link</button>
-            <p id="loginDeployStatus" class="auto-status"></p>
+          <div class="deploy-login-box hidden" hidden aria-hidden="true" style="display:none !important; visibility:hidden !important; height:0 !important; overflow:hidden !important;">
+            <input id="loginDeployUrlInput" type="url" autocomplete="off" tabindex="-1" aria-hidden="true" />
+            <button id="loginSaveDeployUrlBtn" class="soft-btn" type="button" tabindex="-1" aria-hidden="true">Lưu link</button>
+            <p id="loginDeployStatus" class="auto-status" aria-hidden="true"></p>
           </div>
           <p id="loginMessage" class="message-line"></p>
         </div>
@@ -188,16 +185,13 @@
           <h2>Cài auto cập nhật</h2>
           <button class="soft-btn" value="close" type="submit">Đóng</button>
         </div>
-        <div class="deploy-settings-box hidden" hidden aria-hidden="true">
-          <label>
-            Link Deploy Apps Script
-            <input id="deployUrlInput" type="url" autocomplete="off" placeholder="https://script.google.com/macros/s/.../exec" />
-          </label>
-          <div class="deploy-actions">
-            <button id="testDeployUrlBtn" class="soft-btn" type="button">Kiểm tra</button>
-            <button id="saveDeployUrlBtn" class="success-btn" type="button">Lưu link Deploy</button>
+        <div class="deploy-settings-box hidden" hidden aria-hidden="true" style="display:none !important; visibility:hidden !important; height:0 !important; overflow:hidden !important;">
+          <input id="deployUrlInput" type="url" autocomplete="off" tabindex="-1" aria-hidden="true" />
+          <div class="deploy-actions" aria-hidden="true">
+            <button id="testDeployUrlBtn" class="soft-btn" type="button" tabindex="-1" aria-hidden="true">Kiểm tra</button>
+            <button id="saveDeployUrlBtn" class="success-btn" type="button" tabindex="-1" aria-hidden="true">Lưu link Deploy</button>
           </div>
-          <p id="deployUrlStatus" class="auto-status"></p>
+          <p id="deployUrlStatus" class="auto-status" aria-hidden="true"></p>
         </div>
         <div class="auto-minutes-box">
           <label class="auto-time">
