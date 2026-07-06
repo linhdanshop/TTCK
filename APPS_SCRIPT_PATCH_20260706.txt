@@ -1,31 +1,28 @@
 TTCK Apps Script patch - 2026-07-06
 
-Root cause 1:
-LOG_SYNC showed checkedMessages=0 with query:
-from:mailalert@acb.com.vn newer_than:10d
-This means Gmail search found zero messages before parser/DATA_CK. The Apps Script query must not lock to mailalert only.
+Current deployed symptoms:
+1. Version 20260706-gmail-query-fallback-time-offset fixed Gmail search fallback.
+2. LOG_SYNC now shows checkedMessages=29, so Gmail is being read.
+3. But parsedOk=0 and parseFail=29, so the parser is failing on the current email format.
+4. Old DATA_CK rows still show raw ACB time, e.g. 050726-20:24:37, because sync only appends new rows and did not migrate old rows.
 
-Fix 1:
-- Add buildGmailSearchQueries_(settings, queryDays)
-- syncGmailByDaysLocked_ must run both:
-  1) from configured sourceEmail + newer_than
-  2) fallback newer_than only
-- Deduplicate by Gmail message ID.
+Required deployed version after this patch:
+20260706-parser-fallback-migrate-time
 
-Root cause 2:
-ACB content has: 050726-20:24:37
-MB screenshot shows: 21:24 - 05/07/2026
-The parsed transaction time needs +1 hour.
+Fixes in apps_script_fixed.txt:
+- matchAmount_ now falls back when CAI_DAT amountRegex does not match.
+- matchAmountFallback_ supports Ghi co, Bao co, Credit, Nhan tien, Tien vao, +100.000 VND, So tien, Amount, Gia tri giao dich.
+- extractContentFallback_ no longer requires exact marker 'Noi dung giao dich'; it can extract content around 'GD <code> ddmmyy-HH:mm:ss'.
+- syncGmailByDaysLocked_ logs fixedTimes.
+- fixExistingTransactionTimes_(settings) scans DATA_CK and corrects existing rows that still equal the raw ACB timestamp.
+- buildTxInfo_ applies transactionHourOffset, default 1.
+- readSettings_ now returns transactionHourOffset.
 
-Fix 2:
-- Add CAI_DAT setting: transactionHourOffset = 1
-- Pass settings into buildTxInfo_()
-- In buildTxInfo_(), after creating Date from DDMMYY-HH:mm:ss, apply:
-  d.setHours(d.getHours() + getTransactionHourOffset_(settings));
-- Store tx.time from the adjusted Date, not from raw content.
-
-Version to confirm after deploy:
-20260706-gmail-query-fallback-time-offset
+Expected after deploy and Cập nhật 7 ngày:
+- LOG_SYNC: checkedMessages > 0
+- parsedOk should increase if emails are ACB/TTCK format
+- fixedTimes should be > 0 once if old DATA_CK rows need +1 hour
+- Row containing 050726-20:24:37 should display 05/07/2026 21:24:37
 
 Important:
-GitHub Pages repo stores the web UI only. The running Gmail sync code is in the Google Apps Script project behind the /exec URL. Updating this repo alone does not update that Apps Script project unless clasp or Apps Script API deployment is configured.
+GitHub Pages repo stores the web UI only. The running Gmail sync code is in Google Apps Script behind the /exec URL. Updating this repo alone does not update Apps Script unless clasp/Apps Script API deployment is connected.
