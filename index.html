@@ -301,6 +301,21 @@
     <div id="toast" class="toast hidden"></div>
 
     <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
-    <script type="module" src="./app.js?v=no-deploy-url-20260706-01"></script>
+    <script>
+      (() => {
+        const storageKey = "ttckAppsScriptUrl";
+        const hashText = decodeURIComponent(String(location.hash || "").replace(/^#/, ""));
+        if (!hashText) return;
+
+        const params = new URLSearchParams(hashText);
+        const rawUrl = params.get("appsScriptUrl") || params.get("api") || hashText;
+        const match = String(rawUrl || "").match(/^https:\/\/script\.google\.com\/macros\/s\/[^/?#]+\/exec/i);
+        if (!match) return;
+
+        localStorage.setItem(storageKey, match[0]);
+        history.replaceState(null, document.title, location.pathname + location.search);
+      })();
+    </script>
+    <script type="module" src="./app.js?v=hash-config-20260706-01"></script>
   </body>
 </html>
