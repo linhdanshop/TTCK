@@ -29,7 +29,6 @@ const firebaseConfig = {
 };
 
 // URL mặc định. Admin có thể đổi trên web hoặc trong CAI_DAT: appsScriptUrl.
-const DEFAULT_APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyTY0N44s41DNl2E0KGHvpn5JM3c25a7g0dDYxopHS86HIzu9ZnY0a7WIycVFIiMjgx/exec";
 const APPS_SCRIPT_URL_STORAGE_KEY = "ttckAppsScriptUrl";
 
 const app = initializeApp(firebaseConfig);
@@ -1299,9 +1298,8 @@ function getActiveApiUrl() {
   const localUrl = localStorage.getItem(APPS_SCRIPT_URL_STORAGE_KEY) || "";
   const localClean = normalizeAppsScriptUrl(localUrl, false);
   if (localUrl && !localClean) localStorage.removeItem(APPS_SCRIPT_URL_STORAGE_KEY);
-  return localClean
-    || normalizeAppsScriptUrl(state.settings.appsScriptUrl || "", false)
-    || normalizeAppsScriptUrl(DEFAULT_APPS_SCRIPT_URL, false);
+
+  return localClean || normalizeAppsScriptUrl(state.settings.appsScriptUrl || "", false);
 }
 
 function applySettingsApiUrl() {
