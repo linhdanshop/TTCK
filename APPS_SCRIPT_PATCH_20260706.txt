@@ -1,32 +1,30 @@
 TTCK Apps Script patch - 2026-07-06
 
 Corrected rule:
-DO NOT add +1 hour globally.
-DATA_CK time must come from each Gmail transaction timestamp/content, e.g. 050726-21:54:44 must write 05/07/2026 21:54:44 exactly.
+- DO NOT add +1 hour globally.
+- DATA_CK time must come from each Gmail transaction timestamp/content.
+- DO NOT scan the whole Gmail mailbox with bare newer_than:10d, because it pollutes DEBUG_ACB with Firebase, ads, order emails, etc.
 
-Current deployed symptoms:
-1. Gmail search fallback works: checkedMessages=29.
-2. Parser still fails: parsedOk=0, parseFail=29.
-3. A previous patch added a global +1 hour offset. That is wrong and must be removed.
-4. Rows already shifted by +1 hour must be repaired from the timestamp inside content.
-
-Required deployed version after this correction:
-20260706-no-offset-repair-content-time
+Required deployed version:
+20260706-targeted-gmail-no-debug-noise
 
 Fixes in apps_script_fixed.txt:
-- Removed transactionHourOffset from default settings and readSettings_().
-- Removed getTransactionHourOffset_().
-- buildTxInfo_ now stores exactly the date/time found in the transaction content.
-- Replaced fixExistingTransactionTimes_ with repairExistingTimesFromContent_().
-- repairExistingTimesFromContent_ scans DATA_CK and, when content contains ddmmyy-HH:mm:ss, forces columns Ngay/Gio/Ngay gio back to that exact content timestamp.
-- LOG_SYNC now records repairedTimes instead of fixedTimes.
-- Parser fallback remains: matchAmountFallback_ and extractContentFallback_ are still used to handle changed Gmail email formats.
+- buildGmailSearchQueries_ no longer adds bare newer_than:10d.
+- Gmail queries are targeted:
+  1) configured sourceEmail + newer_than
+  2) accountKeyword + newer_than, default accountKeyword=19337611
+  3) ACB + newer_than
+  4) "Ghi có" + newer_than
+- Added CAI_DAT setting accountKeyword.
+- Added isLikelyTransactionEmail_ to silently skip unrelated emails.
+- Silent skipped emails no longer increment parseFail and no longer write DEBUG_ACB.
+- Kept exact content time repair: ddmmyy-HH:mm:ss / ddmmyy_HH_MM_SS are written exactly into Ngay/Gio/Ngay gio.
+- Added repairDataTimes action for admin.
 
 Expected after deploy and Cập nhật 7 ngày:
-- Version endpoint returns 20260706-no-offset-repair-content-time.
-- Row with content 050726-21:54:44 displays 05/07/2026 21:54:44, not 22:54:44.
-- LOG_SYNC shows repairedTimes > 0 if old rows were shifted wrong.
-- If parsedOk is still 0, inspect DEBUG_ACB latest rows to see exact parser failure reason.
+- LOG_SYNC Query should NOT contain plain `|| newer_than:10d` by itself.
+- DEBUG_ACB should no longer show Firebase/ads/order emails.
+- If parsedOk is still 0, DEBUG_ACB should show only bank-like candidate emails, making the actual parser reason visible.
 
 Important:
 GitHub Pages repo stores the web UI only. The running Gmail sync code is in Google Apps Script behind the /exec URL. Updating this repo alone does not update Apps Script unless clasp/Apps Script API deployment is connected.
