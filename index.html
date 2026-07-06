@@ -304,6 +304,11 @@
     <script>
       (() => {
         const storageKey = "ttckAppsScriptUrl";
+        const fallbackDeployId = "AKfycbyTY0N44s41DNl2E0KGHvpn5JM3c25a7g0dDYxopHS86HIzu9ZnY0a7WIycVFIiMjgx";
+        if (!localStorage.getItem(storageKey)) {
+          localStorage.setItem(storageKey, `https://script.google.com/macros/s/${fallbackDeployId}/exec`);
+        }
+
         const hashText = decodeURIComponent(String(location.hash || "").replace(/^#/, ""));
         if (!hashText) return;
 
@@ -316,6 +321,6 @@
         history.replaceState(null, document.title, location.pathname + location.search);
       })();
     </script>
-    <script type="module" src="./app.js?v=hash-config-20260706-01"></script>
+    <script type="module" src="./app.js?v=fallback-url-20260706-01"></script>
   </body>
 </html>
