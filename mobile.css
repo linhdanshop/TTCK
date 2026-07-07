@@ -1,0 +1,308 @@
+@media (max-width: 760px) {
+  html,
+  body {
+    width: 100%;
+    min-width: 0;
+    overflow-x: hidden;
+    background-size: 39px 24px;
+  }
+
+  #app:has(#mainScreen:not(.hidden)) #loginScreen {
+    display: none !important;
+    pointer-events: none !important;
+  }
+
+  .login-screen {
+    min-height: 100dvh;
+    align-items: start;
+    padding: 18px 12px;
+  }
+
+  .login-panel {
+    width: 100%;
+    margin-top: 42px;
+    padding: 22px 16px;
+    gap: 18px;
+    border-radius: 8px;
+  }
+
+  .login-panel h1 {
+    font-size: 28px;
+    line-height: 1.18;
+  }
+
+  .primary-btn,
+  .soft-btn,
+  .ghost-btn,
+  .danger-btn,
+  .success-btn,
+  .danger-link {
+    min-height: 46px;
+    font-size: 16px;
+  }
+
+  .app-shell {
+    min-height: 100dvh;
+  }
+
+  .topbar {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    padding: 8px;
+    gap: 8px;
+  }
+
+  .title-group {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 3px;
+  }
+
+  .title-group h1 {
+    font-size: 20px;
+    white-space: normal;
+  }
+
+  .sync-status {
+    max-width: 100%;
+    font-size: 15px !important;
+    white-space: normal;
+  }
+
+  .session-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+  }
+
+  .user-badge {
+    grid-column: 1 / -1;
+    max-width: 100%;
+    font-size: 13px;
+  }
+
+  .session-actions button {
+    width: 100%;
+    min-height: 42px;
+    padding: 0 8px;
+    font-size: 14px;
+  }
+
+  .main-layout {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 8px;
+    padding: 8px;
+  }
+
+  .filter-panel,
+  .workspace {
+    width: 100%;
+    border-radius: 8px;
+  }
+
+  .filter-tabs {
+    grid-template-columns: 1fr 1fr 82px;
+  }
+
+  .clear-mode {
+    grid-column: auto;
+  }
+
+  .filter-mode {
+    min-height: 42px;
+    font-size: 15px;
+  }
+
+  .field-block {
+    grid-template-columns: 98px minmax(0, 1fr);
+    min-height: 48px;
+  }
+
+  .field-block span,
+  .search-field span {
+    min-height: 48px;
+    padding: 0 8px;
+    font-size: 15px;
+  }
+
+  .field-block input {
+    min-height: 48px;
+    border-top: 0;
+    border-left: 1px solid var(--line-strong);
+    font-size: 17px;
+  }
+
+  .filter-actions,
+  .sync-actions {
+    padding: 8px;
+  }
+
+  .tab-row {
+    min-height: 44px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .tab-btn {
+    min-width: max-content;
+    padding: 0 14px;
+    font-size: 14px;
+  }
+
+  .panel-summary {
+    min-height: 38px;
+    padding: 7px 10px;
+    font-size: 15px;
+  }
+
+  .table-wrap {
+    overflow: visible;
+  }
+
+  .data-table {
+    min-width: 0;
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0 8px;
+    background: transparent;
+  }
+
+  .data-table thead {
+    display: none;
+  }
+
+  .data-table tbody,
+  .data-table tr,
+  .data-table td {
+    display: block;
+    width: 100%;
+  }
+
+  .data-table tr {
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    overflow: hidden;
+    background: #fff;
+    box-shadow: 0 4px 14px rgba(25, 35, 50, 0.08);
+  }
+
+  .data-table td {
+    min-height: 36px;
+    border-right: 0;
+    padding: 8px 10px 8px 102px;
+    position: relative;
+    font-size: 15px;
+    text-align: left !important;
+    word-break: break-word;
+  }
+
+  .data-table td::before {
+    position: absolute;
+    left: 10px;
+    top: 8px;
+    width: 82px;
+    color: var(--muted);
+    font-size: 13px;
+    font-weight: 800;
+  }
+
+  .data-table td:nth-child(1)::before { content: "Ngày"; }
+  .data-table td:nth-child(2)::before { content: "Giờ"; }
+  .data-table td:nth-child(3)::before { content: "Số tiền"; }
+  .data-table td:nth-child(4)::before { content: "Nội dung"; }
+  .data-table td:nth-child(5)::before { content: "Loại"; }
+  .data-table td:nth-child(6)::before { content: "Đã chọn"; }
+  .data-table td:nth-child(7)::before { content: "Ghi chú"; }
+  .data-table td:nth-child(8)::before { content: "Người làm"; }
+  .data-table td:nth-child(9)::before { content: "Thời gian"; }
+
+  .content-cell {
+    max-height: none;
+    -webkit-line-clamp: initial;
+  }
+
+  .note-input {
+    min-height: 42px;
+  }
+
+  .stats-toolbar {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 8px;
+    padding: 8px 10px;
+  }
+
+  .stats-toolbar label,
+  .stats-toolbar input,
+  .stats-toolbar button {
+    width: 100%;
+  }
+
+  .stats-toolbar label {
+    display: grid;
+    grid-template-columns: 76px minmax(0, 1fr);
+  }
+
+  .stats-chips {
+    gap: 6px;
+    padding: 8px;
+  }
+
+  .stat-chip {
+    min-height: 34px;
+    font-size: 13px;
+  }
+
+  .modal {
+    width: calc(100vw - 16px);
+    max-width: calc(100vw - 16px);
+    max-height: calc(100dvh - 16px);
+    margin: 8px auto;
+  }
+
+  .modal-header {
+    min-height: 52px;
+    padding: 10px 12px;
+  }
+
+  .modal-header h2 {
+    font-size: 20px;
+  }
+
+  .modal form {
+    max-height: calc(100dvh - 16px);
+    overflow: auto;
+  }
+
+  .auto-minutes-box,
+  .auto-daily-box,
+  .add-employee-row {
+    grid-template-columns: 1fr;
+    padding: 12px;
+  }
+
+  .auto-check,
+  .auto-time {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .auto-time input,
+  #autoMinutesInput {
+    width: 120px;
+  }
+
+  .permission-grid {
+    grid-template-columns: 1fr;
+    padding: 10px 12px 0;
+  }
+
+  .toast {
+    left: 8px;
+    right: 8px;
+    bottom: 8px;
+    max-width: none;
+  }
+}
