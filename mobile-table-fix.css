@@ -1,0 +1,87 @@
+@media (max-width: 760px) {
+  .data-table,
+  .data-table tbody,
+  .data-table tr,
+  .data-table td {
+    box-sizing: border-box;
+  }
+
+  .data-table th,
+  .data-table td,
+  .data-table th:nth-child(1),
+  .data-table td:nth-child(1),
+  .data-table th:nth-child(2),
+  .data-table td:nth-child(2),
+  .data-table th:nth-child(3),
+  .data-table td:nth-child(3),
+  .data-table th:nth-child(4),
+  .data-table td:nth-child(4),
+  .data-table th:nth-child(5),
+  .data-table td:nth-child(5),
+  .data-table th:nth-child(6),
+  .data-table td:nth-child(6),
+  .data-table th:nth-child(7),
+  .data-table td:nth-child(7),
+  .data-table th:nth-child(8),
+  .data-table td:nth-child(8),
+  .data-table th:nth-child(9),
+  .data-table td:nth-child(9) {
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    text-align: left !important;
+  }
+
+  .data-table td {
+    display: grid !important;
+    grid-template-columns: 84px minmax(0, 1fr);
+    column-gap: 10px;
+    align-items: start;
+    min-height: 38px;
+    padding: 8px 10px !important;
+    white-space: normal !important;
+    word-break: normal !important;
+    overflow-wrap: break-word !important;
+  }
+
+  .data-table td::before {
+    position: static !important;
+    width: auto !important;
+    min-width: 0 !important;
+    color: #667085;
+    line-height: 1.35;
+  }
+
+  .data-table td:nth-child(1),
+  .data-table td:nth-child(2),
+  .data-table td:nth-child(3),
+  .data-table td:nth-child(5),
+  .data-table td:nth-child(6) {
+    white-space: nowrap !important;
+    overflow-wrap: normal !important;
+  }
+
+  .data-table td:nth-child(3) {
+    font-weight: 900;
+    color: #111827;
+  }
+
+  .data-table td:nth-child(4) {
+    white-space: normal !important;
+  }
+
+  .content-cell {
+    display: block !important;
+    max-height: none !important;
+    overflow: visible !important;
+    -webkit-line-clamp: unset !important;
+    -webkit-box-orient: initial !important;
+    word-break: normal !important;
+    overflow-wrap: break-word !important;
+  }
+
+  .note-input {
+    width: 100%;
+    min-width: 0;
+  }
+}
